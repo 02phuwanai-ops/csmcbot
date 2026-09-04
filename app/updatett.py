@@ -1,11 +1,13 @@
 import re
 from curl_cffi import requests
+from app.auth import get_authenticated_session
 
 
 class UpdateTTClient:
 
     def __init__(self, cookies_str: str = None):
         self.base_url = "https://csmcbot.truecorp.co.th/updatett"
+        # สร้าง Session ตั้งต้นแบบ API Pure
         self.session = requests.Session(impersonate="chrome120")
 
         # 1. รายชื่อช่าง 7 คน
@@ -63,6 +65,14 @@ class UpdateTTClient:
 
         if cookies_str:
             self.set_cookies_from_string(cookies_str)
+
+    def ensure_authenticated_session(self):
+        """ทำการ Auto-Login ล่าสุด หาก Session เดิมยังไม่ได้ยืนยันตัวตน"""
+        if not self.session or not self.session.cookies:
+            print("🔑 ไม่พบ Cookie สะสม -> เริ่มทำ Auto-Login ผ่าน app/auth.py...")
+            auth_session = get_authenticated_session()
+            if auth_session and auth_session.cookies:
+                self.session.cookies.update(auth_session.cookies)
 
     def set_cookies_from_string(self, cookie_header: str):
         """แปลง Cookie String ใส่ Session"""
@@ -141,7 +151,8 @@ class UpdateTTClient:
     def fetch_all_tickets_from_web(
         self, zone: str = "WW BMA East", worktype: str = "Corporate Service"
     ) -> list:
-        """ดึงรายการ Ticket ทั้งหมดใน Dropdown ของ Zone"""
+        """ดึงรายการ Ticket ทั้งหมดใน Dropdown ของ Zone (พร้อม Auto Login)"""
+        self.ensure_authenticated_session()
         url = f"{self.base_url}/get_ticket"
         payload = {"zone": zone, "worktype": worktype}
 
@@ -155,6 +166,8 @@ class UpdateTTClient:
                     return data
                 elif isinstance(data, dict):
                     return data.get("tickets", []) or data.get("data", [])
+            else:
+                print(f"⚠️ ยิงดึงรายการตั๋วไม่ผ่าน Status: {res.status_code}")
         except Exception as e:
             print(f"Error fetching ticket list: {e}")
 
@@ -185,6 +198,7 @@ class UpdateTTClient:
         """
         ดึงรายละเอียด Ticket เฉพาะอันที่ผ่านการคัดชื่อช่างมาแล้ว
         """
+        self.ensure_authenticated_session()
         full_ticket_val = self.get_full_ticket_text(ticket_item)
 
         url = f"{self.base_url}/get_ticketDeatil"
