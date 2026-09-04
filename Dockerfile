@@ -20,4 +20,4 @@ RUN playwright install chromium --with-deps
 COPY . .
 
 # สั่งรัน FastAPI บน Port 10000 (Port มาตรฐานของ Render)
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "10000"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "10000"]
