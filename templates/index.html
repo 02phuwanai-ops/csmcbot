@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>UpdateTT Daily Summary</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #f3f5f7; margin: 0; color: #18202a; }
+    header { background: linear-gradient(90deg, #ef1b1b, #b52887, #16b7df); color: white; padding: 18px; }
+    main { max-width: 1100px; margin: 18px auto; padding: 0 14px; }
+    .card { background: white; border-radius: 14px; padding: 18px; margin-bottom: 16px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+    .checks { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .check { font-weight: normal; background: #f7f8fa; padding: 8px; border-radius: 8px; cursor: pointer; }
+    input { margin-right: 6px; }
+    button { border: 0; border-radius: 10px; padding: 12px 18px; background: #1687e8; color: white; font-weight: bold; cursor: pointer; }
+    button:hover { background: #116ec2; }
+    .btn-copy { background: #28a745; padding: 6px 12px; font-size: 12px; border-radius: 6px; }
+    .btn-copy:hover { background: #218838; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { padding: 12px 10px; border-bottom: 1px solid #ddd; text-align: left; vertical-align: top; }
+    th { background: #f6f7f8; }
+    .ok { padding: 12px; background: #e8f7ed; color: #1e7e34; border-radius: 8px; margin-bottom: 16px; font-weight: bold; }
+    .err { padding: 12px; background: #ffe8e8; color: #d63031; border-radius: 8px; margin-bottom: 16px; font-weight: bold; }
+    .ticket-badge { background: #e9ecef; padding: 2px 6px; border-radius: 4px; font-weight: bold; }
+    .district-tag { color: #0056b3; font-weight: bold; }
+    @media(max-width:700px) { .grid { grid-template-columns: 1fr; } .checks { grid-template-columns: 1fr; } table { font-size: 13px; } }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>📋 UpdateTT Daily Summary</h1>
+  <span>ดึงงาน → ตรวจสอบ → เตรียมข้อความ LINE</span>
+</header>
+
+<main>
+  <form method="post" action="/fetch">
+    <div class="card">
+      <h2>1. เลือกเงื่อนไข</h2>
+      <label>วันที่: <input type="date" name="work_date"></label>
+      
+      <div class="grid" style="margin-top: 14px;">
+        <div>
+          <h3>📍 6 เขต</h3>
+          <div class="checks">
+            {% for z in zones %}
+            <label class="check">
+              <input type="checkbox" name="zones" value="{{z}}" checked>{{z}}
+            </label>
+            {% endfor %}
+          </div>
+        </div>
+        
+        <div>
+          <h3>👤 5 พนักงาน</h3>
+          <div class="checks">
+            {% for e in employees %}
+            <label class="check">
+              <input type="checkbox" name="employees" value="{{e}}" checked>{{e}}
+            </label>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+      
+      <br>
+      <button type="submit">🔄 ดึงข้อมูลงาน</button>
+    </div>
+  </form>
+
+  {% if message %}<div class="ok">{{message}}</div>{% endif %}
+  {% if error %}<div class="err">{{error}}</div>{% endif %}
+
+  <div class="card">
+    <h2>2. ผลลัพธ์</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Ticket / ช่าง</th>
+          <th>นัดหมาย</th>
+          <th>ลูกค้า / เบอร์โทร</th>
+          <th>เขต / สถานที่</th>
+          <th>อาการเสีย</th>
+          <th>LINE Text</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in results %}
+        <tr>
+          <td>
+            <span class="ticket-badge">🎫 {{r.ticket_id}}</span><br>
+            <small>👤 {{r.employee}}</small>
+          </td>
+          <td>📅 {{r.appointment}}</td>
+          <td>
+            <strong>🏢 {{r.customer}}</strong><br>
+            <small>📞 {{r.phone}}</small>
+          </td>
+          <td>
+            <span class="district-tag">📍 {{r.district}}</span><br>
+            <small>{{r.location}}</small>
+          </td>
+          <td>🔧 {{r.subject}}</td>
+          <td>
+            <button class="btn-copy" onclick="copyLineFormat('{{r.ticket_id}}', '{{r.employee}}', '{{r.appointment}}', '{{r.customer}}', '{{r.district}}', '{{r.phone}}', '{{r.subject}}', '{{r.location}}')">
+              📋 ก๊อปปี้
+            </button>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="6" style="text-align: center; color: #888;">ยังไม่มีข้อมูล หรือไม่พบรายการที่ตรงตามเงื่อนไข</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</main>
+
+<script>
+function copyLineFormat(ticket, emp, appt, cust, district, phone, subj, loc) {
+  const text = `━━━━━━━━━━━━━━━━━━━━
+🎫 ${ticket}
+👤 ${emp}
+
+📅 ${appt}
+🏢 ${cust}
+📍 เขต: ${district}
+📞 ${phone}
+
+🔧 ${subj}
+📍 ${loc}
+━━━━━━━━━━━━━━━━━━━━`;
+
+  navigator.clipboard.writeText(text).then(() => {
+    alert('คัดลอกข้อความสำหรับ LINE เรียบร้อยแล้ว!');
+  }).catch(err => {
+    console.error('ไม่สามารถคัดลอกได้:', err);
+  });
+}
+</script>
+
+</body>
+</html>

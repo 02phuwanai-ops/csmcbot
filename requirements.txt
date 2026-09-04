@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+jinja2
+python-multipart
+requests
+python-dotenv
+fastapi
+uvicorn
+line-bot-sdk
+playwright
+beautifulsoup4
+requests
