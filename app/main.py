@@ -1,4 +1,6 @@
 import os
+from datetime import datetime
+import pytz
 from fastapi import FastAPI, Request, BackgroundTasks
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError, LineBotApiError
@@ -9,23 +11,31 @@ from app.updatett import UpdateTTClient
 
 app = FastAPI()
 
-# 1. ดึง Token, Secret และ Cookie จาก Environment Variables
+# 1. ดึง Token และ Secret จาก Environment Variables
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET", "")
-COOKIES_STR = os.getenv("COOKIES_STR", "")
 
 # Initialize Clients
-client = UpdateTTClient(cookies_str=COOKIES_STR)
+client = UpdateTTClient()
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 
 
-def generate_daily_report(selected_zones=None, selected_employees=None, work_date=""):
+def get_current_thailand_date() -> str:
+    """ดึงวันที่ปัจจุบันของประเทศไทย ในรูปแบบ DD/MM/YYYY"""
+    tz = pytz.timezone("Asia/Bangkok")
+    now = datetime.now(tz)
+    return now.strftime("%d/%m/%Y")
+
+
+def generate_daily_report(selected_zones=None, selected_employees=None, work_date=None):
     """ดึงข้อมูล Ticket ที่ผ่านการคัดกรอง แล้วแปลงเป็นข้อความ"""
-    latest_cookies = os.getenv("COOKIES_STR", COOKIES_STR)
-    if latest_cookies:
-        client.set_cookies_from_string(latest_cookies)
     
+    # 1. กำหนดวันที่เป็น วันนี้ (เวลาไทย) หากไม่ได้ระบุมา
+    if not work_date:
+        work_date = get_current_thailand_date()
+
+    # 2. ทำการ Auto-Login และดึงรายการ Ticket
     filtered_tickets = client.fetch_filtered_tickets()
 
     # === PRINT DEBUG LOGS ===
@@ -45,6 +55,7 @@ def generate_daily_report(selected_zones=None, selected_employees=None, work_dat
 
     print(f"=== [DEBUG 2] ผ่านเงื่อนไขเขตและแกะรายละเอียดสำเร็จ: {len(raw_details)} ใบ ===")
 
+    # 3. แปลงรายละเอียดตั๋วเป็นข้อความรายงาน
     line_message_text = parse_and_group_by_zone(
         raw_tickets_detail=raw_details,
         selected_employees=selected_employees,
