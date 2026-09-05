@@ -115,21 +115,23 @@ class UpdateTTClient:
     def fetch_all_tickets_from_web(
         self, zone: str = "2", worktype: str = "Corporate Service", retry: bool = True
     ) -> list:
-        """ดึงรายการ Ticket โดยส่ง Key ให้ตรงกับ Form Data บนหน้าเว็บเป๊ะๆ"""
+        """ดึงรายการ Ticket โดยบังคับใช้ zone='2' เป็นหลัก"""
         self.ensure_authenticated_session()
         url = f"{self.base_url}/get_ticket"
         
-        # 🎯 Payload ตาม Network Tab เป๊ะๆ (workType เป็น T ตัวใหญ่)
+        # 🎯 ปรับให้ใช้ zone="2" เสมอเพื่อป้องกัน Status 500
+        target_zone = "2" if zone == "WW BMA East" else str(zone)
+
         payloads_to_try = [
             {
-                "zone": str(zone),
+                "zone": target_zone,
                 "workType": worktype,
                 "includeClosedWithin24Hours": "No"
             },
             {
-                "zone": str(zone),
+                "zone": target_zone,
                 "workType": worktype,
-                "includeClosedWithin24Hours": "Yes"  # เผื่อกรณีตั๋วอยู่ในโหมดปิดภายใน 24 ชม.
+                "includeClosedWithin24Hours": "Yes"
             }
         ]
 
@@ -158,7 +160,7 @@ class UpdateTTClient:
                         print(f"✅ ดึงตั๋วสำเร็จ! เจอทั้งหมด {len(tickets)} ใบ")
                         return tickets
                     else:
-                        print(f"⚠️ [DEBUG] JSON ตอบกลับมาเป็นค่าว่าง [] ( payload: {payload['includeClosedWithin24Hours']} )")
+                        print(f"⚠️ [DEBUG] JSON ตอบกลับมาเป็นค่าว่าง [] ( includeClosed: {payload['includeClosedWithin24Hours']} )")
 
             except Exception as e:
                 print(f"❌ Error fetching ticket list: {e}")
@@ -167,7 +169,7 @@ class UpdateTTClient:
         return []
 
     def fetch_filtered_tickets(
-        self, zone: str = "WW BMA East", worktype: str = "Corporate Service"
+        self, zone: str = "2", worktype: str = "Corporate Service"
     ) -> list:
         all_tickets = self.fetch_all_tickets_from_web(zone=zone, worktype=worktype)
         filtered_tickets = []
@@ -182,18 +184,19 @@ class UpdateTTClient:
     def get_ticket_detail(
         self,
         ticket_item,
-        zone: str = "WW BMA East",
+        zone: str = "2",
         worktype: str = "Corporate Service",
         retry: bool = True
     ) -> dict:
         self.ensure_authenticated_session()
         ticket_id = self.extract_ticket_id(ticket_item)
 
+        target_zone = "2" if zone == "WW BMA East" else str(zone)
+
         url = f"{self.base_url}/get_ticketDeatil"
         payload = {
             "ticketID": ticket_id,
-            "zone": str(zone),
-            "region": str(zone),
+            "zone": target_zone,
             "worktype": worktype,
         }
 
@@ -220,60 +223,3 @@ class UpdateTTClient:
         except Exception as e:
             print(f"Error fetching detail for Ticket: {e}")
             return {}
-
-    def extract_customer_phone(self, raw_data: dict) -> str:
-        if not raw_data:
-            return None
-            
-        text_corp = f"{raw_data.get('custMobile', '')} {raw_data.get('custTel', '')} {raw_data.get('remark', '')} {str(raw_data)}"
-        found_phones = re.findall(r'0[689]\d{8}', text_corp)
-        
-        for phone in found_phones:
-            if phone not in self.tech_phones:
-                return phone
-                
-        return None
-
-    @staticmethod
-    def parse_hold_sla(log_text: str, raw_data: dict = None) -> dict:
-        """
-        สกัดเวลานัดและเหตุผล (ปรับปรุง RegEx ให้ยืดหยุ่นขึ้นรองรับหลายแพทเทิร์น)
-        """
-        result = {"is_hold": False, "reschedule_time": None, "reason": None}
-        
-        # 1. เช็คสถานะ HOLD SLA
-        if log_text and "HOLD SLA" in log_text.upper():
-            result["is_hold"] = True
-
-        if log_text:
-            # Pattern 1: จับคำว่า to ตามด้วย วันที่/เวลา (เช่น to 15/06/2026 10:00 หรือ to 2026-06-15)
-            time_match = re.search(r'to\s+([\d{1,2}/-]+\s*[\d{1,2}:]*)', log_text, re.IGNORECASE)
-
-            # Pattern 2: ถ้าไม่เจอ to ให้ค้นหารูปแบบวันที่ + เวลา ทั่วไปในข้อความ (เช่น 15/06/2026 10:00 หรือ 15/06/2569)
-            if not time_match:
-                time_match = re.search(r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\s+\d{1,2}:\d{2})', log_text)
-
-            # Pattern 3: ดึงข้อความในวงเล็บ (เช่น (15/06/2026 10:00))
-            if not time_match:
-                time_match = re.search(r'\(([\d{1,2}/-].*?)\)', log_text)
-
-            if time_match:
-                result["reschedule_time"] = time_match.group(1).strip()
-
-            # สกัดเหตุผล
-            reason_match = re.search(r'(เนื่องจาก.*)', log_text)
-            if reason_match:
-                result["reason"] = reason_match.group(1).strip()
-
-        # Fallback: ถ้าหาจาก log_text ไม่เจอ ให้ลองดูในฟิลด์ JSON Direct (ถ้ามีส่งมา)
-        if not result["reschedule_time"] and raw_data and isinstance(raw_data, dict):
-            reschedule_from_dict = (
-                raw_data.get("appointmentDate")
-                or raw_data.get("appointment_date")
-                or raw_data.get("appointDate")
-                or raw_data.get("rescheduleTime")
-            )
-            if reschedule_from_dict:
-                result["reschedule_time"] = str(reschedule_from_dict).strip()
-
-        return result
