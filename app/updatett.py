@@ -6,7 +6,8 @@ from app.auth import get_authenticated_session
 class UpdateTTClient:
 
     def __init__(self, cookies_str: str = None):
-        self.base_url = "https://csmcbot.truecorp.co.th/updatett"
+        # 🎯 1. แก้ไข Base URL ให้ตรงตาม Network Tab (/updatett/Updatett)
+        self.base_url = "https://csmcbot.truecorp.co.th/updatett/Updatett"
         self.session = requests.Session(impersonate="chrome120")
 
         # 1. รายชื่อช่าง 7 คน
@@ -86,6 +87,7 @@ class UpdateTTClient:
                 or item.get("label")
                 or item.get("value")
                 or item.get("ticketID")
+                or item.get("ticketNo")
                 or ""
             )
             return str(val).strip()
@@ -111,13 +113,14 @@ class UpdateTTClient:
         return False
 
     def fetch_all_tickets_from_web(
-        self, zone: str = "2", worktype: str = "Corporate Service", retry: bool = True
+        self, zone: str = "WW BMA East", worktype: str = "Corporate Service", retry: bool = True
     ) -> list:
-        """ดึงรายการ Ticket โดยมี Fallback และ Debug Log เพื่อหาสาเหตุ Response 0 รายการ"""
+        """ดึงรายการ Ticket โดยส่ง Parameter Region/Zone ที่ตรงตามหน้าเว็บจริง"""
         self.ensure_authenticated_session()
         url = f"{self.base_url}/get_ticket"
         
-        zones_to_try = [zone, "2", "", "WW BMA East"]
+        # 🎯 ลำดับการลองดึงค่า Region/Zone (ใช้ WW BMA East จากหน้าเว็บเป็นหลัก)
+        zones_to_try = [zone, "WW BMA East", "2"]
         seen_zones = []
 
         for z in zones_to_try:
@@ -125,32 +128,41 @@ class UpdateTTClient:
                 continue
             seen_zones.append(z)
 
-            payload = {"zone": str(z), "worktype": worktype}
+            # 🎯 ส่งทั้ง zone และ region เพื่อรองรับโครงสร้าง Backend ทุกแบบ
+            payload = {
+                "zone": str(z),
+                "region": str(z),
+                "worktype": worktype
+            }
+
             try:
                 res = self.session.post(url, data=payload, headers=self.headers, timeout=30)
                 
-                # 📌 1. ปริ้นท์เช็ค Status Code และ Response จริงที่ Render ได้รับ
-                print(f"🔍 [DEBUG] Zone='{z}' | Status: {res.status_code}")
-                print(f"🔍 [DEBUG] RAW Response (100 ตัวแรก): {res.text[:100]}")
+                print(f"🔍 [DEBUG] URL: {url} | Zone/Region='{z}' | Status: {res.status_code}")
 
                 if res.status_code == 200:
                     try:
                         data = res.json()
                     except Exception as json_err:
-                        print(f"❌ [DEBUG] ปลายทางตอบ 200 แต่ไม่ใช่ JSON (ติดหน้า HTML/Captcha): {json_err}")
+                        print(f"❌ [DEBUG] ปลายทางตอบ 200 แต่ไม่ใช่ JSON: {json_err}")
                         continue
 
                     tickets = []
                     if isinstance(data, list):
                         tickets = data
                     elif isinstance(data, dict):
-                        tickets = data.get("tickets", []) or data.get("data", [])
+                        # 🎯 เพิ่ม ticket_list ตามที่ Server ปลายทางตอบกลับมาจริง
+                        tickets = (
+                            data.get("ticket_list", [])
+                            or data.get("tickets", [])
+                            or data.get("data", [])
+                        )
                     
                     if tickets:
-                        print(f"✅ ดึงตั๋วสำเร็จด้วย zone='{z}' (เจอ {len(tickets)} ใบ)")
+                        print(f"✅ ดึงตั๋วสำเร็จด้วย Region/Zone='{z}' (เจอ {len(tickets)} ใบ)")
                         return tickets
                     else:
-                        print(f"⚠️ [DEBUG] JSON ตอบกลับมาเป็นค่าว่าง [] (ไม่มีตั๋วใน Zone นี้)")
+                        print(f"⚠️ [DEBUG] คืนค่า Success แต่ ticket_list ว่างเปล่าใน Region/Zone '{z}'")
 
                 elif res.status_code == 404 and retry:
                     print("⚠️ เจอ Status 404 -> Re-login แล้วลองใหม่...")
@@ -164,7 +176,7 @@ class UpdateTTClient:
         return []
 
     def fetch_filtered_tickets(
-        self, zone: str = "2", worktype: str = "Corporate Service"
+        self, zone: str = "WW BMA East", worktype: str = "Corporate Service"
     ) -> list:
         all_tickets = self.fetch_all_tickets_from_web(zone=zone, worktype=worktype)
         filtered_tickets = []
@@ -179,7 +191,7 @@ class UpdateTTClient:
     def get_ticket_detail(
         self,
         ticket_item,
-        zone: str = "2",
+        zone: str = "WW BMA East",
         worktype: str = "Corporate Service",
         retry: bool = True
     ) -> dict:
@@ -190,6 +202,7 @@ class UpdateTTClient:
         payload = {
             "ticketID": ticket_id,
             "zone": str(zone),
+            "region": str(zone),
             "worktype": worktype,
         }
 
