@@ -1,5 +1,4 @@
 import re
-import json
 from curl_cffi import requests
 from app.auth import get_authenticated_session
 
@@ -185,7 +184,6 @@ class UpdateTTClient:
         return filtered_tickets
 
     def get_ticket_activity_log(self, ticket_id: str, zone: str = "2") -> str:
-        """ดึง Activity Log แบบคลุมทั้ง Text และ JSON เพื่อป้องกันการตกหล่น"""
         self.ensure_authenticated_session()
         url = f"{self.base_url}/get_activity_detail"
         payload = {
@@ -196,9 +194,7 @@ class UpdateTTClient:
         try:
             res = self.session.post(url, data=payload, headers=self.headers, timeout=15)
             if res.status_code == 200:
-                raw_text = res.text
-                print(f"📌 [DEBUG] Activity Log Raw Length: {len(raw_text)}")
-                return raw_text
+                return res.text
         except Exception as e:
             print(f"❌ Error fetching activity log for {ticket_id}: {e}")
         return ""
@@ -237,12 +233,20 @@ class UpdateTTClient:
 
                 result_dict = data if isinstance(data, dict) else {"data": data}
 
-                # 🎯 ดึง Activity Log ทั้งหมดเพื่อนำมาแกะข้อความ HOLD SLA
+                # 🎯 1. ดึง Activity Log ทั้งหมดเพื่อหาเวลา HOLD SLA
                 activity_log_text = self.get_ticket_activity_log(ticket_id, zone=target_zone)
                 
-                # ประมวลผลเวลานัดจาก Activity Log
+                # 🎯 2. สกัดเวลาจาก Log
                 hold_info = self.parse_hold_sla(activity_log_text, raw_data=result_dict)
                 result_dict["hold_info"] = hold_info
+
+                # 🎯 3. เขียนทับฟิลด์เวลาหลอก (ExpectDate) ด้วยเวลานัดจริงจาก HOLD SLA เพื่อให้บอทแสดงผลถูกต้อง
+                if hold_info.get("reschedule_time"):
+                    real_time = hold_info["reschedule_time"]
+                    result_dict["ExpectDate"] = real_time
+                    result_dict["appointmentDate"] = real_time
+                    result_dict["appointment_date"] = real_time
+                    result_dict["appointDate"] = real_time
 
                 return result_dict
             elif res.status_code == 404 and retry:
@@ -269,36 +273,29 @@ class UpdateTTClient:
 
     @staticmethod
     def parse_hold_sla(log_text: str, raw_data: dict = None) -> dict:
-        """สกัดเวลานัด HOLD SLA จาก Activity Log (จับช่วงเวลาหลังคำว่า to)"""
         result = {"is_hold": False, "reschedule_time": None, "reason": None}
-        
-        if log_text and "HOLD" in log_text.upper():
+        if not log_text:
+            return result
+
+        # 🎯 ล้าง HTML Tag ออกทั้งหมด เพื่อให้เหลือแต่ข้อความล้วน
+        clean_text = re.sub(r'<[^>]+>', ' ', log_text)
+        clean_text = re.sub(r'\s+', ' ', clean_text)
+
+        if "HOLD" in clean_text.upper():
             result["is_hold"] = True
 
-        if log_text:
-            # 🎯 ดึงรูปแบบ "to DD/MM/YY HH:MM" เช่น "to 06/09/26 08:30"
-            to_matches = re.findall(r'to\s+(\d{1,2}/\d{1,2}/\d{2,4}\s+\d{1,2}:\d{2})', log_text, re.IGNORECASE)
-            if to_matches:
-                # เอาเฉพาะรายการล่าสุดท้ายสุด
-                result["reschedule_time"] = to_matches[-1].strip()
-            else:
-                # สำรองค้นหาแพทเทิร์นวันที่ใน Log
-                time_matches = re.findall(r'(\d{1,2}/\d{1,2}/\d{2,4}\s+\d{1,2}:\d{2})', log_text)
-                if time_matches:
-                    result["reschedule_time"] = time_matches[-1].strip()
+        # 🎯 ค้นหาคำว่า "to [วันที่ เวลา]" เช่น "to 06/09/26 09:00" หรือ "to 06/09/26 08:30"
+        to_matches = re.findall(r'to\s+(\d{1,2}/\d{1,2}/\d{2,4}\s+\d{1,2}:\d{2})', clean_text, re.IGNORECASE)
+        if to_matches:
+            result["reschedule_time"] = to_matches[-1].strip()
+        else:
+            # สำรองค้นหาแพทเทิร์นวันที่แบบทั่วไปใน Log
+            time_matches = re.findall(r'(\d{1,2}/\d{1,2}/\d{2,4}\s+\d{1,2}:\d{2})', clean_text)
+            if time_matches:
+                result["reschedule_time"] = time_matches[-1].strip()
 
-            reason_match = re.search(r'(เนื่องจาก.*)', log_text)
-            if reason_match:
-                result["reason"] = reason_match.group(1).strip()
-
-        # หากหาใน Activity Log ไม่เจอจริงๆ ถึงจะใช้เวลาสำรอง
-        if not result["reschedule_time"] and raw_data and isinstance(raw_data, dict):
-            reschedule_from_dict = (
-                raw_data.get("appointmentDate")
-                or raw_data.get("appointment_date")
-                or raw_data.get("appointDate")
-            )
-            if reschedule_from_dict:
-                result["reschedule_time"] = str(reschedule_from_dict).strip()
+        reason_match = re.search(r'(เนื่องจาก.*)', clean_text)
+        if reason_match:
+            result["reason"] = reason_match.group(1).strip()
 
         return result
