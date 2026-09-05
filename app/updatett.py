@@ -188,6 +188,23 @@ class UpdateTTClient:
         print(f"🎯 จากทั้งหมด {len(all_tickets)} รายการ -> คัดเหลือเฉพาะช่างในทีม {len(filtered_tickets)} รายการ")
         return filtered_tickets
 
+    def get_ticket_activity_log(self, ticket_id: str, zone: str = "2") -> str:
+        """ดึง Activity Log ทั้งหมดของ Ticket เพื่อนำมาอ่านข้อมูล HOLD SLA ล่าสุด"""
+        self.ensure_authenticated_session()
+        url = f"{self.base_url}/get_activity_detail"
+        payload = {
+            "ticketID": ticket_id,
+            "zone": "2" if zone == "WW BMA East" or not zone else str(zone),
+        }
+
+        try:
+            res = self.session.post(url, data=payload, headers=self.headers, timeout=15)
+            if res.status_code == 200:
+                return str(res.json() if res.content else res.text)
+        except Exception as e:
+            print(f"❌ Error fetching activity log for {ticket_id}: {e}")
+        return ""
+
     def get_ticket_detail(
         self,
         ticket_item,
@@ -221,7 +238,16 @@ class UpdateTTClient:
                 if not any(dist in address_info for dist in self.allowed_districts):
                     return {}
 
-                return data if isinstance(data, dict) else {"data": data}
+                result_dict = data if isinstance(data, dict) else {"data": data}
+
+                # 🎯 ดึง Activity Log เพิ่มเติมเพื่ออ่านข้อความ HOLD SLA จาก Log ล่าสุด
+                activity_log_text = self.get_ticket_activity_log(ticket_id, zone=target_zone)
+                
+                # นำ Activity Log ไปประมวลผลดึงเวลานัดและเหตุผล HOLD SLA
+                hold_info = self.parse_hold_sla(activity_log_text, raw_data=result_dict)
+                result_dict["hold_info"] = hold_info
+
+                return result_dict
             elif res.status_code == 404 and retry:
                 self.ensure_authenticated_session(force_refresh=True)
                 return self.get_ticket_detail(ticket_item, zone=zone, worktype=worktype, retry=False)
@@ -252,21 +278,21 @@ class UpdateTTClient:
             result["is_hold"] = True
 
         if log_text:
-            time_match = re.search(r'to\s+([\d{1,2}/-]+\s*[\d{1,2}:]*)', log_text, re.IGNORECASE)
-
-            if not time_match:
-                time_match = re.search(r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\s+\d{1,2}:\d{2})', log_text)
-
-            if not time_match:
-                time_match = re.search(r'\(([\d{1,2}/-].*?)\)', log_text)
-
-            if time_match:
-                result["reschedule_time"] = time_match.group(1).strip()
+            # 🎯 ดึงวันที่/เวลา หลังคำว่า 'to' เช่น 'to 06/09/26 09:00'
+            to_match = re.search(r'to\s+(\d{1,2}/\d{1,2}/\d{2,4}\s+\d{1,2}:\d{2})', log_text, re.IGNORECASE)
+            if to_match:
+                result["reschedule_time"] = to_match.group(1).strip()
+            else:
+                # สำรองค้นหารูปแบบวันที่ทั่วไปจาก Log
+                time_match = re.search(r'(\d{1,2}/\d{1,2}/\d{2,4}\s+\d{1,2}:\d{2})', log_text)
+                if time_match:
+                    result["reschedule_time"] = time_match.group(1).strip()
 
             reason_match = re.search(r'(เนื่องจาก.*)', log_text)
             if reason_match:
                 result["reason"] = reason_match.group(1).strip()
 
+        # หากหาจาก Log ไม่พบ ค่อยพิจารณาใช้ฟิลด์เวลาสำรอง
         if not result["reschedule_time"] and raw_data and isinstance(raw_data, dict):
             reschedule_from_dict = (
                 raw_data.get("appointmentDate")
