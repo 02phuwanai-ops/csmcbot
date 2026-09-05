@@ -20,6 +20,13 @@ MAIN_ZONES = [
     "วังทองหลาง",
 ]
 
+# รายการเบอร์ช่างเพื่อคัดออกจากเบอร์ลูกค้า
+TECH_PHONES = [
+    "0820054606", "0970642598", "0820054570", "0834903149",
+    "0910024273", "0824669506", "0993515969", "0826779358",
+    "0968950525", "0852151700", "0829935069"
+]
+
 
 def clean_text(text: str) -> str:
     """ล้างช่องว่างส่วนเกิน"""
@@ -29,30 +36,39 @@ def clean_text(text: str) -> str:
 def extract_appointment_info(full_text: str, target_date_short: str) -> dict:
     """
     ดึงวันที่และเวลานัดหมายจาก Log / HOLD SLA
-    เช่น: HOLD SLA (07/06/26 17:30 to 04/09/26 14:00)
+    เช่น: HOLD SLA (07/06/26 17:30 to 04/09/26 14:00) หรือ 04/09/2026 14:00
     """
-    # 1. ค้นหา Pattern ช่วงวันที่ HOLD SLA: to DD/MM/YY HH:MM
+    parts = target_date_short.split("/")
+    day, month = parts[0], parts[1]
+    raw_year = parts[2]
+
+    # คำนวณปี 2 หลัก และ 4 หลัก ป้องกันการซ้ำซ้อน (202026)
+    year_short = raw_year[-2:]
+    year_full = f"20{year_short}"
+
+    # 1. ค้นหา Pattern ช่วงวันที่ HOLD SLA: to DD/MM/YY(YY) HH:MM
     hold_matches = re.findall(
-        r"to\s+(\d{2}/\d{2}/\d{2})\s+(\d{1,2}:\d{2})", full_text, re.IGNORECASE
+        r"to\s+(\d{2}/\d{2}/\d{2,4})\s+(\d{1,2}[:\.]\d{2})", full_text, re.IGNORECASE
     )
     if hold_matches:
-        last_date_short, last_time = hold_matches[-1]
-        if last_date_short == target_date_short:
-            day, month, year = last_date_short.split("/")
+        last_date, last_time = hold_matches[-1]
+        # ตรวจสอบว่าตรงกับวันที่เป้าหมายหรือไม่
+        if last_date in [f"{day}/{month}/{year_short}", f"{day}/{month}/{year_full}"]:
+            time_clean = last_time.replace(".", ":")
             return {
-                "date": f"{day}/{month}/20{year}",
-                "time": f"{last_time} น.",
+                "date": f"{day}/{month}/{year_full}",
+                "time": f"{time_clean} น.",
             }
 
     # 2. ค้นหา Pattern ทั่วไปที่มีวันที่ตรงกับ target_date_short ตามด้วยเวลา
+    date_pattern = f"({re.escape(f'{day}/{month}/{year_short}')}|{re.escape(f'{day}/{month}/{year_full}')})"
     general_match = re.search(
-        rf"{re.escape(target_date_short)}\s+(\d{{1,2}}[\.:]\d{{2}})", full_text
+        rf"{date_pattern}\s+(\d{{1,2}}[\.:]\d{{2}})", full_text
     )
     if general_match:
-        time_clean = general_match.group(1).replace(".", ":")
-        day, month, year = target_date_short.split("/")
+        time_clean = general_match.group(2).replace(".", ":")
         return {
-            "date": f"{day}/{month}/20{year}",
+            "date": f"{day}/{month}/{year_full}",
             "time": f"{time_clean} น.",
         }
 
@@ -74,11 +90,20 @@ def parse_and_group_by_zone(
     parsed_tickets = []
 
     for res_json in raw_tickets_detail:
-        ticket_html = res_json.get("ticket_detail", "")
+        if not isinstance(res_json, dict):
+            continue
+
+        # รวมข้อความทั้งหมดจาก JSON Response ให้ครอบคลุมทุก Key ที่เซิร์ฟเวอร์ส่งมา
+        ticket_html = (
+            res_json.get("ticket_detail", "")
+            or res_json.get("detail", "")
+            or res_json.get("html", "")
+            or str(res_json)
+        )
         circuit_html = res_json.get("circuit_detail", "")
 
-        soup_ticket = BeautifulSoup(ticket_html, "html.parser")
-        soup_circuit = BeautifulSoup(circuit_html, "html.parser")
+        soup_ticket = BeautifulSoup(str(ticket_html), "html.parser")
+        soup_circuit = BeautifulSoup(str(circuit_html), "html.parser")
 
         ticket_text = clean_text(soup_ticket.get_text(separator=" "))
         circuit_text = clean_text(soup_circuit.get_text(separator=" "))
@@ -108,7 +133,8 @@ def parse_and_group_by_zone(
         # -------------------------------------------------------------
         # 3. ดึง Circuit ID & ชื่อบริษัท/สถานที่
         # -------------------------------------------------------------
-        circuit_m = re.search(r"([A-Z]\d{5,8}|J\d{5,8})", full_text)
+        # ปรับ [A-Z] เป็น [A-SU-Z] เพื่อยกเว้นตัว T ไม่ให้จับโดน T2026...
+        circuit_m = re.search(r"([A-SU-Z]\d{5,8}|J\d{5,8})", full_text)
         circuit_id = circuit_m.group(1) if circuit_m else ""
 
         loc_m = re.search(
@@ -117,23 +143,29 @@ def parse_and_group_by_zone(
             re.IGNORECASE,
         )
         location_address = clean_text(loc_m.group(1)) if loc_m else ""
-        location_address = re.sub(r"^T\d+\s*", "", location_address)
-        location_address = re.sub(r"^LOCATION VCARE:\s*", "", location_address, flags=re.IGNORECASE)
+        
+        # คลีนตัวเลขขยะ หรือคำว่า LOCATION VCARE ออกจากตัวสถานที่
+        location_address = re.sub(r"^(?:T?\d+|LOCATION VCARE:)\s*", "", location_address, flags=re.IGNORECASE)
+        location_address = clean_text(location_address)
 
         company_disp = f"{circuit_id} {location_address}".strip()
-
         # -------------------------------------------------------------
-        # 4. ดึง ชื่อผู้ติดต่อ & เบอร์โทรศัพท์ (เน้นเบอร์มือถือ)
+        # 4. ดึง ชื่อผู้ติดต่อ & เบอร์โทรศัพท์ (เน้นเบอร์มือถือลูกค้า)
         # -------------------------------------------------------------
         contact_name = "ลูกค้า"
-        name_m = re.search(r"(?:ติดต่อ|คุณ|Khun)\s*([ก-๙a-zA-A]+)", full_text)
+        # ปรับแก้ให้รองรับคำว่า "คุณ" ที่มีเว้นวรรค และดึงชื่อ-นามสกุลได้ถูกต้อง
+        name_m = re.search(r"(?:ติดต่อ|คุณ|Khun)\s*([ก-๙a-zA-Z]+(?:\s+[ก-๙a-zA-Z]+)?)", full_text)
         if name_m:
-            contact_name = f"คุณ{name_m.group(1)}"
+            c_name = name_m.group(1).strip()
+            contact_name = c_name if c_name.startswith("คุณ") else f"คุณ{c_name}"
 
+        # ค้นหาเบอร์มือถือที่ขึ้นต้นด้วย 06, 08, 09 ที่ไม่ใช่เบอร์ช่าง
         phone_number = "ไม่ระบุ"
-        phone_m = re.search(r"(0[689]\d{8}|0\d{1,2}-\d{3}-\d{4})", full_text)
-        if phone_m:
-            phone_number = phone_m.group(1)
+        all_phones = re.findall(r"0[689]\d{8}", full_text)
+        for ph in all_phones:
+            if ph not in TECH_PHONES:
+                phone_number = ph
+                break
 
         parsed_tickets.append({
             "ticket_id": ticket_id,

@@ -149,12 +149,14 @@ class UpdateTTClient:
         return False
 
     def fetch_all_tickets_from_web(
-        self, zone: str = "WW BMA East", worktype: str = "Corporate Service"
+        self, zone: str = "2", worktype: str = "Corporate Service"
     ) -> list:
         """ดึงรายการ Ticket ทั้งหมดใน Dropdown ของ Zone (พร้อม Auto Login)"""
         self.ensure_authenticated_session()
         url = f"{self.base_url}/get_ticket"
-        payload = {"zone": zone, "worktype": worktype}
+        
+        # ปรับ zone เป็น "2" ตาม Payload จริงของระบบ
+        payload = {"zone": str(zone), "worktype": worktype}
 
         try:
             res = self.session.post(
@@ -167,14 +169,14 @@ class UpdateTTClient:
                 elif isinstance(data, dict):
                     return data.get("tickets", []) or data.get("data", [])
             else:
-                print(f"⚠️ ยิงดึงรายการตั๋วไม่ผ่าน Status: {res.status_code}")
+                print(f"⚠️ ยิงดึงรายการตั๋วไม่ผ่าน Status: {res.status_code} - {res.text[:200]}")
         except Exception as e:
             print(f"Error fetching ticket list: {e}")
 
         return []
 
     def fetch_filtered_tickets(
-        self, zone: str = "WW BMA East", worktype: str = "Corporate Service"
+        self, zone: str = "2", worktype: str = "Corporate Service"
     ) -> list:
         """
         คัดกรองเฉพาะ Ticket ที่มีชื่อช่างตรงกับทีม 7 คน ตั้งแต่ขั้นแรก
@@ -192,19 +194,19 @@ class UpdateTTClient:
     def get_ticket_detail(
         self,
         ticket_item,
-        zone: str = "WW BMA East",
+        zone: str = "2",
         worktype: str = "Corporate Service",
     ) -> dict:
         """
         ดึงรายละเอียด Ticket เฉพาะอันที่ผ่านการคัดชื่อช่างมาแล้ว
         """
         self.ensure_authenticated_session()
-        full_ticket_val = self.get_full_ticket_text(ticket_item)
+        ticket_id = self.extract_ticket_id(ticket_item)
 
         url = f"{self.base_url}/get_ticketDeatil"
         payload = {
-            "ticketID": full_ticket_val,
-            "zone": zone,
+            "ticketID": ticket_id,
+            "zone": str(zone),
             "worktype": worktype,
         }
 
