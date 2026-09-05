@@ -218,22 +218,45 @@ class UpdateTTClient:
         return None
 
     @staticmethod
-    def parse_hold_sla(log_text: str) -> dict:
+    def parse_hold_sla(log_text: str, raw_data: dict = None) -> dict:
+        """
+        สกัดเวลานัดและเหตุผล (ปรับปรุง RegEx ให้ยืดหยุ่นขึ้นรองรับหลายแพทเทิร์น)
+        """
         result = {"is_hold": False, "reschedule_time": None, "reason": None}
-        if not log_text or "HOLD SLA" not in log_text:
-            return result
+        
+        # 1. เช็คสถานะ HOLD SLA
+        if log_text and "HOLD SLA" in log_text.upper():
+            result["is_hold"] = True
 
-        result["is_hold"] = True
-        time_match = re.search(r'to\s+([\d/]+\s+[\d:]+)', log_text)
-        if time_match:
-            result["reschedule_time"] = time_match.group(1).strip()
-        else:
-            fallback_match = re.search(r'\((.*?)\)', log_text)
-            if fallback_match:
-                result["reschedule_time"] = fallback_match.group(1).strip()
+        if log_text:
+            # Pattern 1: จับคำว่า to ตามด้วย วันที่/เวลา (เช่น to 15/06/2026 10:00 หรือ to 2026-06-15)
+            time_match = re.search(r'to\s+([\d{1,2}/-]+\s*[\d{1,2}:]*)', log_text, re.IGNORECASE)
 
-        reason_match = re.search(r'(เนื่องจาก.*)', log_text)
-        if reason_match:
-            result["reason"] = reason_match.group(1).strip()
+            # Pattern 2: ถ้าไม่เจอ to ให้ค้นหารูปแบบวันที่ + เวลา ทั่วไปในข้อความ (เช่น 15/06/2026 10:00 หรือ 15/06/2569)
+            if not time_match:
+                time_match = re.search(r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\s+\d{1,2}:\d{2})', log_text)
+
+            # Pattern 3: ดึงข้อความในวงเล็บ (เช่น (15/06/2026 10:00))
+            if not time_match:
+                time_match = re.search(r'\(([\d{1,2}/-].*?)\)', log_text)
+
+            if time_match:
+                result["reschedule_time"] = time_match.group(1).strip()
+
+            # สกัดเหตุผล
+            reason_match = re.search(r'(เนื่องจาก.*)', log_text)
+            if reason_match:
+                result["reason"] = reason_match.group(1).strip()
+
+        # Fallback: ถ้าหาจาก log_text ไม่เจอ ให้ลองดูในฟิลด์ JSON Direct (ถ้ามีส่งมา)
+        if not result["reschedule_time"] and raw_data and isinstance(raw_data, dict):
+            reschedule_from_dict = (
+                raw_data.get("appointmentDate")
+                or raw_data.get("appointment_date")
+                or raw_data.get("appointDate")
+                or raw_data.get("rescheduleTime")
+            )
+            if reschedule_from_dict:
+                result["reschedule_time"] = str(reschedule_from_dict).strip()
 
         return result
