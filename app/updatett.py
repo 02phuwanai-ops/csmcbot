@@ -6,7 +6,6 @@ from app.auth import get_authenticated_session
 class UpdateTTClient:
 
     def __init__(self, cookies_str: str = None):
-        # 🎯 1. แก้ไข Base URL ให้ตรงตาม Network Tab (/updatett/Updatett)
         self.base_url = "https://csmcbot.truecorp.co.th/updatett/Updatett"
         self.session = requests.Session(impersonate="chrome120")
 
@@ -82,7 +81,8 @@ class UpdateTTClient:
             return item.strip()
         if isinstance(item, dict):
             val = (
-                item.get("text")
+                item.get("SUBJECT")
+                or item.get("text")
                 or item.get("val")
                 or item.get("label")
                 or item.get("value")
@@ -94,6 +94,9 @@ class UpdateTTClient:
         return str(item).strip()
 
     def extract_ticket_id(self, item) -> str:
+        if isinstance(item, dict) and item.get("ticketID"):
+            return str(item.get("ticketID")).strip()
+            
         text = self.get_full_ticket_text(item)
         match = re.search(r'(TT\d+)', text)
         if match:
@@ -101,13 +104,16 @@ class UpdateTTClient:
         return text.split()[0] if text else ""
 
     def is_target_technician(self, ticket_input) -> bool:
-        ticket_text = self.get_full_ticket_text(ticket_input)
-        if not ticket_text:
-            return False
+        """ตรวจสอบชื่อช่างจากฟิลด์ SUBJECT หรือ Object ตั๋ว"""
+        if isinstance(ticket_input, dict):
+            subject = ticket_input.get("SUBJECT", str(ticket_input))
+        else:
+            subject = str(ticket_input)
 
-        ticket_text_lower = ticket_text.lower()
+        subject_lower = subject.lower()
+
         for target in self.target_technicians:
-            if target.lower() in ticket_text_lower:
+            if target.lower() in subject_lower:
                 return True
 
         return False
@@ -115,12 +121,11 @@ class UpdateTTClient:
     def fetch_all_tickets_from_web(
         self, zone: str = "2", worktype: str = "Corporate Service", retry: bool = True
     ) -> list:
-        """ดึงรายการ Ticket โดยบังคับใช้ zone='2' เป็นหลัก"""
+        """ดึงรายการ Ticket และแปลง Dict ของ ticket_list ให้เป็น List"""
         self.ensure_authenticated_session()
         url = f"{self.base_url}/get_ticket"
         
-        # 🎯 ปรับให้ใช้ zone="2" เสมอเพื่อป้องกัน Status 500
-        target_zone = "2" if zone == "WW BMA East" else str(zone)
+        target_zone = "2" if zone == "WW BMA East" or not zone else str(zone)
 
         payloads_to_try = [
             {
@@ -146,21 +151,23 @@ class UpdateTTClient:
                     except Exception:
                         continue
 
+                    raw_ticket_list = data.get("ticket_list", {}) if isinstance(data, dict) else data
                     tickets = []
-                    if isinstance(data, list):
-                        tickets = data
-                    elif isinstance(data, dict):
-                        tickets = (
-                            data.get("ticket_list", [])
-                            or data.get("tickets", [])
-                            or data.get("data", [])
-                        )
+
+                    # 🎯 แปลง Dict {"TT...": {"SUBJECT": "..."}} ให้กลายเป็น List
+                    if isinstance(raw_ticket_list, dict):
+                        for t_id, t_info in raw_ticket_list.items():
+                            if isinstance(t_info, dict):
+                                t_info["ticketID"] = t_id
+                                tickets.append(t_info)
+                            else:
+                                tickets.append({"ticketID": t_id, "SUBJECT": str(t_info)})
+                    elif isinstance(raw_ticket_list, list):
+                        tickets = raw_ticket_list
                     
                     if tickets:
                         print(f"✅ ดึงตั๋วสำเร็จ! เจอทั้งหมด {len(tickets)} ใบ")
                         return tickets
-                    else:
-                        print(f"⚠️ [DEBUG] JSON ตอบกลับมาเป็นค่าว่าง [] ( includeClosed: {payload['includeClosedWithin24Hours']} )")
 
             except Exception as e:
                 print(f"❌ Error fetching ticket list: {e}")
@@ -191,7 +198,7 @@ class UpdateTTClient:
         self.ensure_authenticated_session()
         ticket_id = self.extract_ticket_id(ticket_item)
 
-        target_zone = "2" if zone == "WW BMA East" else str(zone)
+        target_zone = "2" if zone == "WW BMA East" or not zone else str(zone)
 
         url = f"{self.base_url}/get_ticketDeatil"
         payload = {
@@ -223,3 +230,51 @@ class UpdateTTClient:
         except Exception as e:
             print(f"Error fetching detail for Ticket: {e}")
             return {}
+
+    def extract_customer_phone(self, raw_data: dict) -> str:
+        if not raw_data:
+            return None
+            
+        text_corp = f"{raw_data.get('custMobile', '')} {raw_data.get('custTel', '')} {raw_data.get('remark', '')} {str(raw_data)}"
+        found_phones = re.findall(r'0[689]\d{8}', text_corp)
+        
+        for phone in found_phones:
+            if phone not in self.tech_phones:
+                return phone
+                
+        return None
+
+    @staticmethod
+    def parse_hold_sla(log_text: str, raw_data: dict = None) -> dict:
+        result = {"is_hold": False, "reschedule_time": None, "reason": None}
+        
+        if log_text and "HOLD SLA" in log_text.upper():
+            result["is_hold"] = True
+
+        if log_text:
+            time_match = re.search(r'to\s+([\d{1,2}/-]+\s*[\d{1,2}:]*)', log_text, re.IGNORECASE)
+
+            if not time_match:
+                time_match = re.search(r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\s+\d{1,2}:\d{2})', log_text)
+
+            if not time_match:
+                time_match = re.search(r'\(([\d{1,2}/-].*?)\)', log_text)
+
+            if time_match:
+                result["reschedule_time"] = time_match.group(1).strip()
+
+            reason_match = re.search(r'(เนื่องจาก.*)', log_text)
+            if reason_match:
+                result["reason"] = reason_match.group(1).strip()
+
+        if not result["reschedule_time"] and raw_data and isinstance(raw_data, dict):
+            reschedule_from_dict = (
+                raw_data.get("appointmentDate")
+                or raw_data.get("appointment_date")
+                or raw_data.get("appointDate")
+                or raw_data.get("rescheduleTime")
+            )
+            if reschedule_from_dict:
+                result["reschedule_time"] = str(reschedule_from_dict).strip()
+
+        return result
