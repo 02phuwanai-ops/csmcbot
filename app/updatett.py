@@ -114,41 +114,24 @@ class UpdateTTClient:
             return match.group(1)
         return text.split()[0] if text else ""
 
-    def extract_tech_names(self, ticket_text: str) -> list:
-        if not ticket_text:
-            return []
-
-        matches = re.findall(r'\(([^)]+)\)', ticket_text)
-        if not matches:
-            return []
-
-        last_bracket_content = matches[-1]
-        names = [name.strip() for name in last_bracket_content.split(',')]
-        return names
-
     def is_target_technician(self, ticket_input) -> bool:
+        """ตรวจสอบว่ามีชื่อช่างในทีมอย่างน้อย 1 คนอยู่ในข้อความ Ticket หรือไม่"""
         ticket_text = self.get_full_ticket_text(ticket_input)
         if not ticket_text:
             return False
 
-        if "(" not in ticket_text or ")" not in ticket_text:
-            return False
-
-        tech_names = self.extract_tech_names(ticket_text)
-        if not tech_names:
-            return False
-
-        for extracted_name in tech_names:
-            for target in self.target_technicians:
-                if target.lower() in extracted_name.lower():
-                    return True
+        # เช็กตรงๆ ว่าชื่อช่างในทีมคนใดคนหนึ่งปรากฏอยู่ในข้อความตั๋วหรือไม่
+        ticket_text_lower = ticket_text.lower()
+        for target in self.target_technicians:
+            if target.lower() in ticket_text_lower:
+                return True
 
         return False
 
     def fetch_all_tickets_from_web(
-        self, zone: str = "2", worktype: str = "Corporate Service", retry: bool = True
+        self, zone: str = "WW BMA East", worktype: str = "Corporate Service", retry: bool = True
     ) -> list:
-        """ดึงรายการ Ticket ทั้งหมดใน Dropdown (มี Mechanism แก้อาการ 404)"""
+        """ดึงรายการ Ticket ทั้งหมดใน Dropdown โดยปรับ Default Zone เป็น WW BMA East"""
         self.ensure_authenticated_session()
         url = f"{self.base_url}/get_ticket"
         payload = {"zone": str(zone), "worktype": worktype}
@@ -175,7 +158,7 @@ class UpdateTTClient:
         return []
 
     def fetch_filtered_tickets(
-        self, zone: str = "2", worktype: str = "Corporate Service"
+        self, zone: str = "WW BMA East", worktype: str = "Corporate Service"
     ) -> list:
         all_tickets = self.fetch_all_tickets_from_web(zone=zone, worktype=worktype)
         filtered_tickets = []
@@ -190,7 +173,7 @@ class UpdateTTClient:
     def get_ticket_detail(
         self,
         ticket_item,
-        zone: str = "2",
+        zone: str = "WW BMA East",
         worktype: str = "Corporate Service",
         retry: bool = True
     ) -> dict:
