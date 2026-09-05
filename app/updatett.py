@@ -7,7 +7,6 @@ class UpdateTTClient:
 
     def __init__(self, cookies_str: str = None):
         self.base_url = "https://csmcbot.truecorp.co.th/updatett"
-        # สร้าง Session ตั้งต้นแบบ API Pure (Chrome 120 impersonate)
         self.session = requests.Session(impersonate="chrome120")
 
         # 1. รายชื่อช่าง 7 คน
@@ -21,7 +20,7 @@ class UpdateTTClient:
             "Pollawat",
         ]
 
-        # 2. รายชื่อ 6 เขตที่อนุญาตเท่านั้น
+        # 2. รายชื่อ 6 เขตที่อนุญาต
         self.allowed_districts = [
             "คลองเตย",
             "ยานนาวา",
@@ -33,17 +32,9 @@ class UpdateTTClient:
 
         # 3. Blacklist เบอร์โทรช่าง
         self.tech_phones = [
-            "0820054606",
-            "0970642598",
-            "0820054570",
-            "0834903149",
-            "0910024273",
-            "0824669506",
-            "0993515969",
-            "0826779358",
-            "0968950525",
-            "0852151700",
-            "0829935069",
+            "0820054606", "0970642598", "0820054570", "0834903149",
+            "0910024273", "0824669506", "0993515969", "0826779358",
+            "0968950525", "0852151700", "0829935069",
         ]
 
         self.headers = {
@@ -67,22 +58,15 @@ class UpdateTTClient:
             self.set_cookies_from_string(cookies_str)
 
     def ensure_authenticated_session(self, force_refresh: bool = False):
-        """ทำการ Auto-Login ดึง Session Cookie ใหม่เสมอเมื่อไร้ Cookie หรือโดนบังคับ Refresh"""
         if force_refresh or not self.session.cookies:
             print("🔑 บังคับดึง Authenticated Session ใหม่ผ่าน app/auth.py...")
-            
-            # สร้าง Session ใหม่ป้องกัน Cookie ค้าง
             self.session = requests.Session(impersonate="chrome120")
-            
             auth_session = get_authenticated_session()
             if auth_session and auth_session.cookies:
                 self.session.cookies.update(auth_session.cookies)
                 print("✅ อัปเดต Cookie ใหม่ลงใน Session สำเร็จ")
-            else:
-                print("❌ การทำ Auto-Login ล้มเหลว ไม่ได้รับ Cookie")
 
     def set_cookies_from_string(self, cookie_header: str):
-        """แปลง Cookie String ใส่ Session"""
         if not cookie_header:
             return
         cookies_dict = {}
@@ -115,12 +99,10 @@ class UpdateTTClient:
         return text.split()[0] if text else ""
 
     def is_target_technician(self, ticket_input) -> bool:
-        """ตรวจสอบว่ามีชื่อช่างในทีมอย่างน้อย 1 คนอยู่ในข้อความ Ticket หรือไม่"""
         ticket_text = self.get_full_ticket_text(ticket_input)
         if not ticket_text:
             return False
 
-        # เช็กตรงๆ ว่าชื่อช่างในทีมคนใดคนหนึ่งปรากฏอยู่ในข้อความตั๋วหรือไม่
         ticket_text_lower = ticket_text.lower()
         for target in self.target_technicians:
             if target.lower() in ticket_text_lower:
@@ -129,36 +111,47 @@ class UpdateTTClient:
         return False
 
     def fetch_all_tickets_from_web(
-        self, zone: str = "WW BMA East", worktype: str = "Corporate Service", retry: bool = True
+        self, zone: str = "2", worktype: str = "Corporate Service", retry: bool = True
     ) -> list:
-        """ดึงรายการ Ticket ทั้งหมดใน Dropdown โดยปรับ Default Zone เป็น WW BMA East"""
+        """ดึงรายการ Ticket โดยมี Fallback หาก Zone ติด Error 500"""
         self.ensure_authenticated_session()
         url = f"{self.base_url}/get_ticket"
-        payload = {"zone": str(zone), "worktype": worktype}
+        
+        # ลองส่งค่า zone ตามลำดับ: "2" -> "" (ว่าง) -> "WW BMA East"
+        zones_to_try = [zone, "2", "", "WW BMA East"]
+        seen_zones = []
 
-        try:
-            res = self.session.post(
-                url, data=payload, headers=self.headers, timeout=30
-            )
-            if res.status_code == 200:
-                data = res.json()
-                if isinstance(data, list):
-                    return data
-                elif isinstance(data, dict):
-                    return data.get("tickets", []) or data.get("data", [])
-            elif res.status_code == 404 and retry:
-                print("⚠️ เจอ Status 404 -> คาดว่า Session หมดอายุ ทำการ Re-login แล้วลองใหม่...")
-                self.ensure_authenticated_session(force_refresh=True)
-                return self.fetch_all_tickets_from_web(zone=zone, worktype=worktype, retry=False)
-            else:
-                print(f"⚠️ ยิงดึงรายการตั๋วไม่ผ่าน Status: {res.status_code} - {res.text[:200]}")
-        except Exception as e:
-            print(f"Error fetching ticket list: {e}")
+        for z in zones_to_try:
+            if z in seen_zones:
+                continue
+            seen_zones.append(z)
 
+            payload = {"zone": str(z), "worktype": worktype}
+            try:
+                res = self.session.post(url, data=payload, headers=self.headers, timeout=30)
+                if res.status_code == 200:
+                    data = res.json()
+                    tickets = []
+                    if isinstance(data, list):
+                        tickets = data
+                    elif isinstance(data, dict):
+                        tickets = data.get("tickets", []) or data.get("data", [])
+                    
+                    if tickets:
+                        print(f"✅ ดึงตั๋วสำเร็จด้วย zone='{z}' (เจอ {len(tickets)} ใบ)")
+                        return tickets
+                elif res.status_code == 404 and retry:
+                    print("⚠️ เจอ Status 404 -> Re-login แล้วลองใหม่...")
+                    self.ensure_authenticated_session(force_refresh=True)
+                    return self.fetch_all_tickets_from_web(zone=zone, worktype=worktype, retry=False)
+            except Exception as e:
+                print(f"Error fetching ticket list with zone='{z}': {e}")
+
+        print("⚠️ ทดลองทุก zone แล้ว ไม่พบตั๋วหรือเกิดข้อผิดพลาดจากเซิร์ฟเวอร์")
         return []
 
     def fetch_filtered_tickets(
-        self, zone: str = "WW BMA East", worktype: str = "Corporate Service"
+        self, zone: str = "2", worktype: str = "Corporate Service"
     ) -> list:
         all_tickets = self.fetch_all_tickets_from_web(zone=zone, worktype=worktype)
         filtered_tickets = []
@@ -173,7 +166,7 @@ class UpdateTTClient:
     def get_ticket_detail(
         self,
         ticket_item,
-        zone: str = "WW BMA East",
+        zone: str = "2",
         worktype: str = "Corporate Service",
         retry: bool = True
     ) -> dict:
@@ -203,7 +196,6 @@ class UpdateTTClient:
 
                 return data if isinstance(data, dict) else {"data": data}
             elif res.status_code == 404 and retry:
-                print(f"⚠️ ดึงรายละเอียด Ticket {ticket_id} ติด 404 -> ลอง Re-login แล้วยิงใหม่...")
                 self.ensure_authenticated_session(force_refresh=True)
                 return self.get_ticket_detail(ticket_item, zone=zone, worktype=worktype, retry=False)
             else:
@@ -217,7 +209,6 @@ class UpdateTTClient:
             return None
             
         text_corp = f"{raw_data.get('custMobile', '')} {raw_data.get('custTel', '')} {raw_data.get('remark', '')} {str(raw_data)}"
-        
         found_phones = re.findall(r'0[689]\d{8}', text_corp)
         
         for phone in found_phones:
@@ -228,17 +219,11 @@ class UpdateTTClient:
 
     @staticmethod
     def parse_hold_sla(log_text: str) -> dict:
-        result = {
-            "is_hold": False,
-            "reschedule_time": None,
-            "reason": None
-        }
-        
+        result = {"is_hold": False, "reschedule_time": None, "reason": None}
         if not log_text or "HOLD SLA" not in log_text:
             return result
 
         result["is_hold"] = True
-        
         time_match = re.search(r'to\s+([\d/]+\s+[\d:]+)', log_text)
         if time_match:
             result["reschedule_time"] = time_match.group(1).strip()
