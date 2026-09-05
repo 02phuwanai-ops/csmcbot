@@ -113,11 +113,10 @@ class UpdateTTClient:
     def fetch_all_tickets_from_web(
         self, zone: str = "2", worktype: str = "Corporate Service", retry: bool = True
     ) -> list:
-        """ดึงรายการ Ticket โดยมี Fallback หาก Zone ติด Error 500"""
+        """ดึงรายการ Ticket โดยมี Fallback และ Debug Log เพื่อหาสาเหตุ Response 0 รายการ"""
         self.ensure_authenticated_session()
         url = f"{self.base_url}/get_ticket"
         
-        # ลองส่งค่า zone ตามลำดับ: "2" -> "" (ว่าง) -> "WW BMA East"
         zones_to_try = [zone, "2", "", "WW BMA East"]
         seen_zones = []
 
@@ -129,8 +128,18 @@ class UpdateTTClient:
             payload = {"zone": str(z), "worktype": worktype}
             try:
                 res = self.session.post(url, data=payload, headers=self.headers, timeout=30)
+                
+                # 📌 1. ปริ้นท์เช็ค Status Code และ Response จริงที่ Render ได้รับ
+                print(f"🔍 [DEBUG] Zone='{z}' | Status: {res.status_code}")
+                print(f"🔍 [DEBUG] RAW Response (100 ตัวแรก): {res.text[:100]}")
+
                 if res.status_code == 200:
-                    data = res.json()
+                    try:
+                        data = res.json()
+                    except Exception as json_err:
+                        print(f"❌ [DEBUG] ปลายทางตอบ 200 แต่ไม่ใช่ JSON (ติดหน้า HTML/Captcha): {json_err}")
+                        continue
+
                     tickets = []
                     if isinstance(data, list):
                         tickets = data
@@ -140,12 +149,16 @@ class UpdateTTClient:
                     if tickets:
                         print(f"✅ ดึงตั๋วสำเร็จด้วย zone='{z}' (เจอ {len(tickets)} ใบ)")
                         return tickets
+                    else:
+                        print(f"⚠️ [DEBUG] JSON ตอบกลับมาเป็นค่าว่าง [] (ไม่มีตั๋วใน Zone นี้)")
+
                 elif res.status_code == 404 and retry:
                     print("⚠️ เจอ Status 404 -> Re-login แล้วลองใหม่...")
                     self.ensure_authenticated_session(force_refresh=True)
                     return self.fetch_all_tickets_from_web(zone=zone, worktype=worktype, retry=False)
+
             except Exception as e:
-                print(f"Error fetching ticket list with zone='{z}': {e}")
+                print(f"❌ Error fetching ticket list with zone='{z}': {e}")
 
         print("⚠️ ทดลองทุก zone แล้ว ไม่พบตั๋วหรือเกิดข้อผิดพลาดจากเซิร์ฟเวอร์")
         return []
