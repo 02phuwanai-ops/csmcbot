@@ -113,45 +113,41 @@ class UpdateTTClient:
         return False
 
     def fetch_all_tickets_from_web(
-        self, zone: str = "WW BMA East", worktype: str = "Corporate Service", retry: bool = True
+        self, zone: str = "2", worktype: str = "Corporate Service", retry: bool = True
     ) -> list:
-        """ดึงรายการ Ticket โดยส่ง Parameter Region/Zone ที่ตรงตามหน้าเว็บจริง"""
+        """ดึงรายการ Ticket โดยส่ง Key ให้ตรงกับ Form Data บนหน้าเว็บเป๊ะๆ"""
         self.ensure_authenticated_session()
         url = f"{self.base_url}/get_ticket"
         
-        # 🎯 ลำดับการลองดึงค่า Region/Zone (ใช้ WW BMA East จากหน้าเว็บเป็นหลัก)
-        zones_to_try = [zone, "WW BMA East", "2"]
-        seen_zones = []
-
-        for z in zones_to_try:
-            if z in seen_zones:
-                continue
-            seen_zones.append(z)
-
-            # 🎯 ส่งทั้ง zone และ region เพื่อรองรับโครงสร้าง Backend ทุกแบบ
-            payload = {
-                "zone": str(z),
-                "region": str(z),
-                "worktype": worktype
+        # 🎯 Payload ตาม Network Tab เป๊ะๆ (workType เป็น T ตัวใหญ่)
+        payloads_to_try = [
+            {
+                "zone": str(zone),
+                "workType": worktype,
+                "includeClosedWithin24Hours": "No"
+            },
+            {
+                "zone": str(zone),
+                "workType": worktype,
+                "includeClosedWithin24Hours": "Yes"  # เผื่อกรณีตั๋วอยู่ในโหมดปิดภายใน 24 ชม.
             }
+        ]
 
+        for payload in payloads_to_try:
             try:
                 res = self.session.post(url, data=payload, headers=self.headers, timeout=30)
-                
-                print(f"🔍 [DEBUG] URL: {url} | Zone/Region='{z}' | Status: {res.status_code}")
+                print(f"🔍 [DEBUG] URL: {url} | Payload: {payload} | Status: {res.status_code}")
 
                 if res.status_code == 200:
                     try:
                         data = res.json()
-                    except Exception as json_err:
-                        print(f"❌ [DEBUG] ปลายทางตอบ 200 แต่ไม่ใช่ JSON: {json_err}")
+                    except Exception:
                         continue
 
                     tickets = []
                     if isinstance(data, list):
                         tickets = data
                     elif isinstance(data, dict):
-                        # 🎯 เพิ่ม ticket_list ตามที่ Server ปลายทางตอบกลับมาจริง
                         tickets = (
                             data.get("ticket_list", [])
                             or data.get("tickets", [])
@@ -159,20 +155,15 @@ class UpdateTTClient:
                         )
                     
                     if tickets:
-                        print(f"✅ ดึงตั๋วสำเร็จด้วย Region/Zone='{z}' (เจอ {len(tickets)} ใบ)")
+                        print(f"✅ ดึงตั๋วสำเร็จ! เจอทั้งหมด {len(tickets)} ใบ")
                         return tickets
                     else:
-                        print(f"⚠️ [DEBUG] คืนค่า Success แต่ ticket_list ว่างเปล่าใน Region/Zone '{z}'")
-
-                elif res.status_code == 404 and retry:
-                    print("⚠️ เจอ Status 404 -> Re-login แล้วลองใหม่...")
-                    self.ensure_authenticated_session(force_refresh=True)
-                    return self.fetch_all_tickets_from_web(zone=zone, worktype=worktype, retry=False)
+                        print(f"⚠️ [DEBUG] JSON ตอบกลับมาเป็นค่าว่าง [] ( payload: {payload['includeClosedWithin24Hours']} )")
 
             except Exception as e:
-                print(f"❌ Error fetching ticket list with zone='{z}': {e}")
+                print(f"❌ Error fetching ticket list: {e}")
 
-        print("⚠️ ทดลองทุก zone แล้ว ไม่พบตั๋วหรือเกิดข้อผิดพลาดจากเซิร์ฟเวอร์")
+        print("⚠️ ทดลองทุกรูปแบบแล้ว ไม่พบตั๋วในระบบ")
         return []
 
     def fetch_filtered_tickets(
