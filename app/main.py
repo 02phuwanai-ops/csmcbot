@@ -1,4 +1,5 @@
 import os
+import logging
 from datetime import datetime
 import pytz
 from fastapi import FastAPI, Request, BackgroundTasks
@@ -9,9 +10,17 @@ from linebot.models import MessageEvent, TextMessage, TextSendMessage
 from app.parser import parse_and_group_by_zone
 from app.updatett import UpdateTTClient
 
-app = FastAPI()
+# 1. ตั้งค่า Logging ให้แสดงเฉพาะ WARNING/ERROR บน Production ( Render )
+IS_PRODUCTION = os.getenv("RENDER", False)
+logging.basicConfig(
+    level=logging.WARNING if IS_PRODUCTION else logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger("csmcbot")
 
-# 1. ดึง Token และ Secret จาก Environment Variables
+app = FastAPI(title="CSMCBot", docs_url=None, redoc_url=None)
+
+# 2. ดึง Token และ Secret จาก Environment Variables
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET", "")
 
@@ -19,6 +28,12 @@ LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET", "")
 client = UpdateTTClient()
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
+
+
+# 3. Endpoint สำหรับ Render Health Check และ Uptime Robot
+@app.get("/")
+async def health_check():
+    return {"status": "online", "service": "CSMCBot"}
 
 
 def get_current_thailand_date() -> str:
@@ -31,17 +46,12 @@ def get_current_thailand_date() -> str:
 def generate_daily_report(selected_zones=None, selected_employees=None, work_date=None):
     """ดึงข้อมูล Ticket ที่ผ่านการคัดกรอง แล้วแปลงเป็นข้อความ"""
     
-    # 1. กำหนดวันที่เป็น วันนี้ (เวลาไทย) หากไม่ได้ระบุมา
     if not work_date:
         work_date = get_current_thailand_date()
 
-    # 2. ทำการ Auto-Login และดึงรายการ Ticket
     filtered_tickets = client.fetch_filtered_tickets()
 
-    # === PRINT DEBUG LOGS ===
-    print(f"=== [DEBUG 1] ดึง filtered_tickets ได้ทั้งหมด: {len(filtered_tickets)} ใบ ===")
-    if filtered_tickets:
-        print(f"=== [DEBUG 1.1] รายการตั๋วที่เจอ: {filtered_tickets} ===")
+    logger.info(f"=== [DEBUG 1] ดึง filtered_tickets ได้ทั้งหมด: {len(filtered_tickets)} ใบ ===")
 
     raw_details = []
     for ticket in filtered_tickets:
@@ -50,12 +60,11 @@ def generate_daily_report(selected_zones=None, selected_employees=None, work_dat
             if detail:
                 raw_details.append(detail)
         except Exception as e:
-            print(f"Error processing ticket detail: {e}")
+            logger.error(f"Error processing ticket detail: {e}")
             continue
 
-    print(f"=== [DEBUG 2] ผ่านเงื่อนไขเขตและแกะรายละเอียดสำเร็จ: {len(raw_details)} ใบ ===")
+    logger.info(f"=== [DEBUG 2] ผ่านเงื่อนไขเขตและแกะรายละเอียดสำเร็จ: {len(raw_details)} ใบ ===")
 
-    # 3. แปลงรายละเอียดตั๋วเป็นข้อความรายงาน
     line_message_text = parse_and_group_by_zone(
         raw_tickets_detail=raw_details,
         selected_employees=selected_employees,
@@ -75,9 +84,9 @@ def process_and_send_push(user_id: str):
 
         line_bot_api.push_message(user_id, TextSendMessage(text=report_text))
     except LineBotApiError as e:
-        print(f"LINE Push Error ({e.status_code}): {e.error.message}")
+        logger.error(f"LINE Push Error ({e.status_code}): {e.error.message}")
     except Exception as e:
-        print(f"Error sending push message: {e}")
+        logger.error(f"Error sending push message: {e}")
         try:
             line_bot_api.push_message(
                 user_id,
@@ -118,10 +127,10 @@ async def callback(request: Request, background_tasks: BackgroundTasks):
                     )
 
     except InvalidSignatureError:
-        print("Invalid Signature. Check LINE_CHANNEL_SECRET.")
+        logger.error("Invalid Signature. Check LINE_CHANNEL_SECRET.")
     except LineBotApiError as e:
-        print(f"LINE API Error ({e.status_code}): {e.error.message}")
+        logger.error(f"LINE API Error ({e.status_code}): {e.error.message}")
     except Exception as e:
-        print(f"Error handling webhook: {e}")
+        logger.error(f"Error handling webhook: {e}")
 
     return "OK"
