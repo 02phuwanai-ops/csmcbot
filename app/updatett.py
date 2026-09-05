@@ -104,7 +104,6 @@ class UpdateTTClient:
         return text.split()[0] if text else ""
 
     def is_target_technician(self, ticket_input) -> bool:
-        """ตรวจสอบชื่อช่างจากฟิลด์ SUBJECT หรือ Object ตั๋ว"""
         if isinstance(ticket_input, dict):
             subject = ticket_input.get("SUBJECT", str(ticket_input))
         else:
@@ -121,7 +120,6 @@ class UpdateTTClient:
     def fetch_all_tickets_from_web(
         self, zone: str = "2", worktype: str = "Corporate Service", retry: bool = True
     ) -> list:
-        """ดึงรายการ Ticket และแปลง Dict ของ ticket_list ให้เป็น List"""
         self.ensure_authenticated_session()
         url = f"{self.base_url}/get_ticket"
         
@@ -143,8 +141,6 @@ class UpdateTTClient:
         for payload in payloads_to_try:
             try:
                 res = self.session.post(url, data=payload, headers=self.headers, timeout=30)
-                print(f"🔍 [DEBUG] URL: {url} | Payload: {payload} | Status: {res.status_code}")
-
                 if res.status_code == 200:
                     try:
                         data = res.json()
@@ -154,7 +150,6 @@ class UpdateTTClient:
                     raw_ticket_list = data.get("ticket_list", {}) if isinstance(data, dict) else data
                     tickets = []
 
-                    # 🎯 แปลง Dict {"TT...": {"SUBJECT": "..."}} ให้กลายเป็น List
                     if isinstance(raw_ticket_list, dict):
                         for t_id, t_info in raw_ticket_list.items():
                             if isinstance(t_info, dict):
@@ -189,7 +184,7 @@ class UpdateTTClient:
         return filtered_tickets
 
     def get_ticket_activity_log(self, ticket_id: str, zone: str = "2") -> str:
-        """ดึง Activity Log ทั้งหมดของ Ticket เพื่อนำมาอ่านข้อมูล HOLD SLA ล่าสุด"""
+        """ดึง Activity Log ทั้งหมดของ Ticket เพื่อเอาข้อความ HOLD SLA ล่าสุด"""
         self.ensure_authenticated_session()
         url = f"{self.base_url}/get_activity_detail"
         payload = {
@@ -214,7 +209,6 @@ class UpdateTTClient:
     ) -> dict:
         self.ensure_authenticated_session()
         ticket_id = self.extract_ticket_id(ticket_item)
-
         target_zone = "2" if zone == "WW BMA East" or not zone else str(zone)
 
         url = f"{self.base_url}/get_ticketDeatil"
@@ -240,10 +234,10 @@ class UpdateTTClient:
 
                 result_dict = data if isinstance(data, dict) else {"data": data}
 
-                # 🎯 ดึง Activity Log เพิ่มเติมเพื่ออ่านข้อความ HOLD SLA จาก Log ล่าสุด
+                # 🎯 บังคับดึง Activity Log แยกต่างหากเพื่ออ่านเวลา HOLD SLA จริง
                 activity_log_text = self.get_ticket_activity_log(ticket_id, zone=target_zone)
                 
-                # นำ Activity Log ไปประมวลผลดึงเวลานัดและเหตุผล HOLD SLA
+                # แกะเวลานัดและเหตุผลจาก Activity Log
                 hold_info = self.parse_hold_sla(activity_log_text, raw_data=result_dict)
                 result_dict["hold_info"] = hold_info
 
@@ -272,18 +266,19 @@ class UpdateTTClient:
 
     @staticmethod
     def parse_hold_sla(log_text: str, raw_data: dict = None) -> dict:
+        """สกัดเวลานัด HOLD SLA จาก Activity Log (จับช่วงเวลาหลังคำว่า 'to')"""
         result = {"is_hold": False, "reschedule_time": None, "reason": None}
         
         if log_text and "HOLD SLA" in log_text.upper():
             result["is_hold"] = True
 
         if log_text:
-            # 🎯 ดึงวันที่/เวลา หลังคำว่า 'to' เช่น 'to 06/09/26 09:00'
+            # 🎯 1. จับแพทเทิร์น "to DD/MM/YY HH:MM" เช่น "to 06/09/26 09:00"
             to_match = re.search(r'to\s+(\d{1,2}/\d{1,2}/\d{2,4}\s+\d{1,2}:\d{2})', log_text, re.IGNORECASE)
             if to_match:
                 result["reschedule_time"] = to_match.group(1).strip()
             else:
-                # สำรองค้นหารูปแบบวันที่ทั่วไปจาก Log
+                # 🎯 2. สำรองค้นหาแพทเทิร์นวันที่ทั่วไปใน Log
                 time_match = re.search(r'(\d{1,2}/\d{1,2}/\d{2,4}\s+\d{1,2}:\d{2})', log_text)
                 if time_match:
                     result["reschedule_time"] = time_match.group(1).strip()
@@ -292,13 +287,12 @@ class UpdateTTClient:
             if reason_match:
                 result["reason"] = reason_match.group(1).strip()
 
-        # หากหาจาก Log ไม่พบ ค่อยพิจารณาใช้ฟิลด์เวลาสำรอง
+        # หากหาใน Activity Log ไม่พบจริงๆ ถึงจะใช้เวลา Appointment Date สำรอง
         if not result["reschedule_time"] and raw_data and isinstance(raw_data, dict):
             reschedule_from_dict = (
                 raw_data.get("appointmentDate")
                 or raw_data.get("appointment_date")
                 or raw_data.get("appointDate")
-                or raw_data.get("rescheduleTime")
             )
             if reschedule_from_dict:
                 result["reschedule_time"] = str(reschedule_from_dict).strip()
