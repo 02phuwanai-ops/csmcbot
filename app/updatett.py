@@ -7,7 +7,7 @@ class UpdateTTClient:
 
     def __init__(self, cookies_str: str = None):
         self.base_url = "https://csmcbot.truecorp.co.th/updatett"
-        # สร้าง Session ตั้งต้นแบบ API Pure
+        # สร้าง Session ตั้งต้นแบบ API Pure (Chrome 120 impersonate)
         self.session = requests.Session(impersonate="chrome120")
 
         # 1. รายชื่อช่าง 7 คน
@@ -66,13 +66,20 @@ class UpdateTTClient:
         if cookies_str:
             self.set_cookies_from_string(cookies_str)
 
-    def ensure_authenticated_session(self):
-        """ทำการ Auto-Login ล่าสุด หาก Session เดิมยังไม่ได้ยืนยันตัวตน"""
-        if not self.session or not self.session.cookies:
-            print("🔑 ไม่พบ Cookie สะสม -> เริ่มทำ Auto-Login ผ่าน app/auth.py...")
+    def ensure_authenticated_session(self, force_refresh: bool = False):
+        """ทำการ Auto-Login ดึง Session Cookie ใหม่เสมอเมื่อไร้ Cookie หรือโดนบังคับ Refresh"""
+        if force_refresh or not self.session.cookies:
+            print("🔑 บังคับดึง Authenticated Session ใหม่ผ่าน app/auth.py...")
+            
+            # สร้าง Session ใหม่ป้องกัน Cookie ค้าง
+            self.session = requests.Session(impersonate="chrome120")
+            
             auth_session = get_authenticated_session()
             if auth_session and auth_session.cookies:
                 self.session.cookies.update(auth_session.cookies)
+                print("✅ อัปเดต Cookie ใหม่ลงใน Session สำเร็จ")
+            else:
+                print("❌ การทำ Auto-Login ล้มเหลว ไม่ได้รับ Cookie")
 
     def set_cookies_from_string(self, cookie_header: str):
         """แปลง Cookie String ใส่ Session"""
@@ -86,7 +93,6 @@ class UpdateTTClient:
         self.session.cookies.update(cookies_dict)
 
     def get_full_ticket_text(self, item) -> str:
-        """สกัดแปลง Object หรือ String ของ Ticket ให้ได้ข้อความเต็มใน Dropdown"""
         if isinstance(item, str):
             return item.strip()
         if isinstance(item, dict):
@@ -102,7 +108,6 @@ class UpdateTTClient:
         return str(item).strip()
 
     def extract_ticket_id(self, item) -> str:
-        """สกัดเฉพาะรหัส TicketID สั้นๆ เช่น TT202608192600"""
         text = self.get_full_ticket_text(item)
         match = re.search(r'(TT\d+)', text)
         if match:
@@ -110,10 +115,6 @@ class UpdateTTClient:
         return text.split()[0] if text else ""
 
     def extract_tech_names(self, ticket_text: str) -> list:
-        """
-        ดึงข้อความภายในวงเล็บทั้งหมดออกมากรณีมีหลายช่าง
-        เช่น: '... (Chakares Sudjai,Wittaya Saomoke)' -> ['Chakares Sudjai', 'Wittaya Saomoke']
-        """
         if not ticket_text:
             return []
 
@@ -126,10 +127,6 @@ class UpdateTTClient:
         return names
 
     def is_target_technician(self, ticket_input) -> bool:
-        """
-        ตรวจสอบว่ามีชื่อช่างในทีม 7 คนอยู่ในวงเล็บหรือไม่
-        ถ้าไม่มีวงเล็บ หรือเป็นช่างคนอื่น จะตอบ False ทันที!
-        """
         ticket_text = self.get_full_ticket_text(ticket_input)
         if not ticket_text:
             return False
@@ -149,13 +146,11 @@ class UpdateTTClient:
         return False
 
     def fetch_all_tickets_from_web(
-        self, zone: str = "2", worktype: str = "Corporate Service"
+        self, zone: str = "2", worktype: str = "Corporate Service", retry: bool = True
     ) -> list:
-        """ดึงรายการ Ticket ทั้งหมดใน Dropdown ของ Zone (พร้อม Auto Login)"""
+        """ดึงรายการ Ticket ทั้งหมดใน Dropdown (มี Mechanism แก้อาการ 404)"""
         self.ensure_authenticated_session()
         url = f"{self.base_url}/get_ticket"
-        
-        # ปรับ zone เป็น "2" ตาม Payload จริงของระบบ
         payload = {"zone": str(zone), "worktype": worktype}
 
         try:
@@ -168,6 +163,10 @@ class UpdateTTClient:
                     return data
                 elif isinstance(data, dict):
                     return data.get("tickets", []) or data.get("data", [])
+            elif res.status_code == 404 and retry:
+                print("⚠️ เจอ Status 404 -> คาดว่า Session หมดอายุ ทำการ Re-login แล้วลองใหม่...")
+                self.ensure_authenticated_session(force_refresh=True)
+                return self.fetch_all_tickets_from_web(zone=zone, worktype=worktype, retry=False)
             else:
                 print(f"⚠️ ยิงดึงรายการตั๋วไม่ผ่าน Status: {res.status_code} - {res.text[:200]}")
         except Exception as e:
@@ -178,9 +177,6 @@ class UpdateTTClient:
     def fetch_filtered_tickets(
         self, zone: str = "2", worktype: str = "Corporate Service"
     ) -> list:
-        """
-        คัดกรองเฉพาะ Ticket ที่มีชื่อช่างตรงกับทีม 7 คน ตั้งแต่ขั้นแรก
-        """
         all_tickets = self.fetch_all_tickets_from_web(zone=zone, worktype=worktype)
         filtered_tickets = []
 
@@ -196,10 +192,8 @@ class UpdateTTClient:
         ticket_item,
         zone: str = "2",
         worktype: str = "Corporate Service",
+        retry: bool = True
     ) -> dict:
-        """
-        ดึงรายละเอียด Ticket เฉพาะอันที่ผ่านการคัดชื่อช่างมาแล้ว
-        """
         self.ensure_authenticated_session()
         ticket_id = self.extract_ticket_id(ticket_item)
 
@@ -220,12 +214,15 @@ class UpdateTTClient:
                 if not data or not isinstance(data, (dict, list)):
                     return {}
                 
-                # ตรวจสอบพื้นที่ว่าอยู่ใน 6 เขตหรือไม่
                 address_info = str(data)
                 if not any(dist in address_info for dist in self.allowed_districts):
                     return {}
 
                 return data if isinstance(data, dict) else {"data": data}
+            elif res.status_code == 404 and retry:
+                print(f"⚠️ ดึงรายละเอียด Ticket {ticket_id} ติด 404 -> ลอง Re-login แล้วยิงใหม่...")
+                self.ensure_authenticated_session(force_refresh=True)
+                return self.get_ticket_detail(ticket_item, zone=zone, worktype=worktype, retry=False)
             else:
                 return {}
         except Exception as e:
@@ -233,7 +230,6 @@ class UpdateTTClient:
             return {}
 
     def extract_customer_phone(self, raw_data: dict) -> str:
-        """สกัดเฉพาะเบอร์ลูกค้าจริง"""
         if not raw_data:
             return None
             
@@ -249,7 +245,6 @@ class UpdateTTClient:
 
     @staticmethod
     def parse_hold_sla(log_text: str) -> dict:
-        """สกัดเฉพาะเวลานัดปลายทาง และเหตุผลกรณีมี HOLD SLA"""
         result = {
             "is_hold": False,
             "reschedule_time": None,
