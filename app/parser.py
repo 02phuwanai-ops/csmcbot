@@ -33,83 +33,125 @@ def clean_text(text: str) -> str:
 
 
 def extract_appointment_info(full_text: str) -> dict:
-    """ดึงวันที่และเวลานัดหมายจาก Log / HOLD SLA"""
+    """ดึงวันที่และเวลานัดหมายอย่างยืดหยุ่น ป้องกัน Ticket หลุด"""
+    # 1. ค้นหา Pattern HOLD SLA
     hold_matches = re.findall(
-        r"(?:to|-|ถึง)\s*(\d{2}/\d{2}/\d{2,4})\s*(\d{1,2}[:\.]\d{2})", full_text, re.IGNORECASE
+        r"(?:to|-|ถึง)\s*(\d{1,2}[/\.-]\d{1,2}[/\.-]\d{2,4})\s*(\d{1,2}[:\.]\d{2})", full_text, re.IGNORECASE
     )
     if hold_matches:
         last_date, last_time = hold_matches[-1]
-        h_parts = last_date.split("/")
-        h_year = f"20{h_parts[2]}" if len(h_parts[2]) == 2 else h_parts[2]
-        time_clean = last_time.replace(".", ":")
-        
-        dt_obj = None
-        try:
-            dt_obj = datetime.strptime(f"{h_parts[0]}/{h_parts[1]}/{h_year} {time_clean}", "%d/%m/%Y %H:%M")
-        except ValueError:
-            pass
+        h_parts = re.split(r"[/\.-]", last_date)
+        if len(h_parts) == 3:
+            h_year = f"20{h_parts[2]}" if len(h_parts[2]) == 2 else h_parts[2]
+            time_clean = last_time.replace(".", ":")
+            dt_obj = None
+            try:
+                dt_obj = datetime.strptime(f"{h_parts[0].zfill(2)}/{h_parts[1].zfill(2)}/{h_year} {time_clean}", "%d/%m/%Y %H:%M")
+            except ValueError:
+                pass
 
-        return {
-            "date": f"{h_parts[0]}/{h_parts[1]}/{h_year}",
-            "time": f"{time_clean} น.",
-            "datetime_obj": dt_obj or datetime.max
-        }
+            return {
+                "date": f"{h_parts[0].zfill(2)}/{h_parts[1].zfill(2)}/{h_year}",
+                "time": f"{time_clean} น.",
+                "datetime_obj": dt_obj or datetime.max
+            }
 
+    # 2. ค้นหา Pattern วันที่ + เวลา ทั่วไป
     text_without_expected = re.sub(
-        r"ExpectedDate\s*:\s*\d{2}/\d{2}/\d{2,4}\s+\d{1,2}[:\.]\d{2}",
+        r"ExpectedDate\s*:\s*\d{1,2}[/\.-]\d{1,2}[/\.-]\d{2,4}\s+\d{1,2}[:\.]\d{2}",
         "",
         full_text,
         flags=re.IGNORECASE
     )
 
     general_match = re.search(
-        r"(\d{2}/\d{2}/\d{2,4})\s+(\d{1,2}[\.:]\d{2})", text_without_expected
+        r"(\d{1,2}[/\.-]\d{1,2}[/\.-]\d{2,4})\s+(\d{1,2}[\.:]\d{2})", text_without_expected
     )
     if general_match:
         g_date, g_time = general_match.group(1), general_match.group(2)
-        h_parts = g_date.split("/")
-        h_year = f"20{h_parts[2]}" if len(h_parts[2]) == 2 else h_parts[2]
-        time_clean = g_time.replace(".", ":")
+        h_parts = re.split(r"[/\.-]", g_date)
+        if len(h_parts) == 3:
+            h_year = f"20{h_parts[2]}" if len(h_parts[2]) == 2 else h_parts[2]
+            time_clean = g_time.replace(".", ":")
+            dt_obj = None
+            try:
+                dt_obj = datetime.strptime(f"{h_parts[0].zfill(2)}/{h_parts[1].zfill(2)}/{h_year} {time_clean}", "%d/%m/%Y %H:%M")
+            except ValueError:
+                pass
 
-        dt_obj = None
-        try:
-            dt_obj = datetime.strptime(f"{h_parts[0]}/{h_parts[1]}/{h_year} {time_clean}", "%d/%m/%Y %H:%M")
-        except ValueError:
-            pass
+            return {
+                "date": f"{h_parts[0].zfill(2)}/{h_parts[1].zfill(2)}/{h_year}",
+                "time": f"{time_clean} น.",
+                "datetime_obj": dt_obj or datetime.max
+            }
 
-        return {
-            "date": f"{h_parts[0]}/{h_parts[1]}/{h_year}",
-            "time": f"{time_clean} น.",
-            "datetime_obj": dt_obj or datetime.max
-        }
-
-    return None
+    # Fallback กรณีไม่พบเวลานัด ให้คืนค่าเพื่อไม่ให้ Ticket หลุดหาย
+    return {
+        "date": "ไม่ระบุวัน",
+        "time": "ไม่ระบุเวลา",
+        "datetime_obj": datetime.max
+    }
 
 
 def extract_circuit_id(full_text: str) -> str:
-    """
-    เจาะจงดึง Circuit ID ตาม Format ของ True/Telecom
-    รองรับรูปแบบ เช่น V16239B, WDS51417, J02645, V02616, I84667, S51417
-    และไม่หลุดจับรหัส Account เช่น A23947940
-    """
-    # ค้นหาคำว่า Circuit: หรือ Circuit ID ก่อน
+    """เจาะจงดึง Circuit ID"""
     match_direct = re.search(r"Circuit\s*(?:ID)?\s*[:\=]?\s*([A-Z]{1,4}\d{4,8}[A-Z]?)", full_text, re.IGNORECASE)
     if match_direct:
         return match_direct.group(1).upper()
 
-    # ค้นหา Pattern Circuit ทั่วไป (เช่น V16239B, WDS51417, J02645)
-    # ยกเว้นตัว A ตามด้วยตัวเลขยาวๆ เกิน 7 หลัก (เพราะมักจะเป็น Acc ID)
     matches = re.findall(r"\b([VJIWS][D]?\d{4,6}[A-Z]?)\b", full_text, re.IGNORECASE)
     if matches:
         return matches[0].upper()
 
-    # Pattern สำรองทั่วไป
     matches_gen = re.findall(r"\b([A-Z]{1,3}\d{4,7}[A-Z]?)\b", full_text)
     for m in matches_gen:
-        if not re.match(r"^A\d{7,}$", m):  # ข้าม A23947940
+        if not re.match(r"^A\d{7,}$", m):
             return m
 
     return ""
+
+
+def extract_customer_contact(full_text: str) -> tuple[str, str]:
+    """
+    ดึงชื่อและเบอร์ติดต่อลูกค้า โดยเน้นจากส่วน 'ลูกค้าแจ้งเหตุเสีย' เป็นหลัก
+    """
+    contact_name = ""
+    phone_number = ""
+
+    # 1. เจาะจงค้นจากส่วน "ลูกค้าแจ้งเหตุเสีย" หรือ "แจ้งเหตุเสีย"
+    issue_section = re.search(r"(?:ลูกค้าแจ้งเหตุเสีย|แจ้งเหตุเสีย|รายละเอียดปัญหา)(.*?)(?:HOLD SLA|SMC|Add Activity|WONUM|$)", full_text, re.IGNORECASE)
+    target_text = issue_section.group(1) if issue_section else full_text
+
+    # ค้นหาเบอร์โทรศัพท์ในส่วนเหตุเสียก่อน
+    phones_in_issue = re.findall(r"0[689]\d{8}", target_text)
+    for ph in phones_in_issue:
+        if ph not in TECH_PHONES:
+            phone_number = ph
+            break
+
+    # ค้นหาชื่อในส่วนเหตุเสีย
+    name_m = re.search(r"(?:คุณ|Khun|ติดต่อ)\s*([ก-๙a-zA-Z]+)", target_text)
+    if name_m:
+        c_name = name_m.group(1).strip()
+        if c_name not in ["ลูกค้า", "ช่าง", "แจ้ง", "เสีย"]:
+            contact_name = f"คุณ{c_name}"
+
+    # 2. หากยังไม่พบ ให้สแกนหาเบอร์ทั่วทั้ง Document
+    if not phone_number:
+        all_phones = re.findall(r"0[689]\d{8}", full_text)
+        for ph in all_phones:
+            if ph not in TECH_PHONES:
+                phone_number = ph
+                break
+
+    if not contact_name:
+        name_m = re.search(r"(?:คุณ|Khun)\s*([ก-๙a-zA-Z]+)", full_text)
+        if name_m:
+            c_name = name_m.group(1).strip()
+            if c_name not in ["ลูกค้า", "ช่าง"]:
+                contact_name = f"คุณ{c_name}"
+
+    return contact_name, phone_number
 
 
 def parse_and_group_by_zone(
@@ -124,7 +166,7 @@ def parse_and_group_by_zone(
     today_formatted = work_date if work_date else today_dt.strftime("%d/%m/%Y")
     
     t_parts = today_formatted.split("/")
-    if len(t_parts[2]) == 2:
+    if len(t_parts) == 3 and len(t_parts[2]) == 2:
         today_formatted = f"{t_parts[0]}/{t_parts[1]}/20{t_parts[2]}"
 
     parsed_tickets = []
@@ -157,14 +199,7 @@ def parse_and_group_by_zone(
             continue
 
         # -------------------------------------------------------------
-        # 1. ดึงข้อมูลวัน/เวลานัดหมาย
-        # -------------------------------------------------------------
-        appt_data = extract_appointment_info(full_text)
-        if not appt_data:
-            continue
-
-        # -------------------------------------------------------------
-        # 2. ดึง Ticket ID
+        # 1. ดึง Ticket ID
         # -------------------------------------------------------------
         ticket_id = "N/A"
         selected_ticket_elem = soup_ticket.select_one("#select2-ticketID-container")
@@ -178,7 +213,12 @@ def parse_and_group_by_zone(
             ticket_id = ticket_m.group(1) if ticket_m else "N/A"
 
         # -------------------------------------------------------------
-        # 3. ดึง Circuit ID & ชื่อสถานที่ (กระชับ)
+        # 2. ดึงข้อมูลวัน/เวลานัดหมาย
+        # -------------------------------------------------------------
+        appt_data = extract_appointment_info(full_text)
+
+        # -------------------------------------------------------------
+        # 3. ดึง Circuit ID & ชื่อสถานที่
         # -------------------------------------------------------------
         circuit_id = extract_circuit_id(full_text)
 
@@ -189,33 +229,18 @@ def parse_and_group_by_zone(
         )
         location_address = clean_text(loc_m.group(1)) if loc_m else ""
         
-        # ตัดข้อความขยะ/ส่วนที่ไม่จำเป็นออก
         location_address = re.sub(r"^(?:T?\d+|LOCATION VCARE:)\s*", "", location_address, flags=re.IGNORECASE)
         location_address = re.sub(r"\s*(ไม่พบข้อมูล|กรุงเทพมหานคร|\d{5}).*", "", location_address, flags=re.IGNORECASE)
-        # ตัดแขวง/เขตและคำค้างท้ายออก
         location_address = re.sub(r"\s*(คลองเตยเหนือ|คลองเตย|คลองตันเหนือ|คลองตัน|ห้วยขวาง|บางกะปิ|สามเสนนอก|วัฒนา|พระโขนง|แขวง).*$", "", location_address, flags=re.IGNORECASE)
         location_address = clean_text(location_address)
 
         circuit_disp = f"Circuit: {circuit_id} {location_address}".strip() if circuit_id else location_address
 
         # -------------------------------------------------------------
-        # 4. ดึง ชื่อผู้ติดต่อ & เบอร์โทรศัพท์
+        # 4. ดึง ชื่อผู้ติดต่อ & เบอร์โทรศัพท์ (เน้นจากลูกค้าแจ้งเหตุเสีย)
         # -------------------------------------------------------------
-        contact_name = ""
-        name_m = re.search(r"(?:คุณ|Khun)\s*([ก-๙a-zA-Z]+)", full_text)
-        if name_m:
-            c_name = name_m.group(1).strip()
-            if c_name not in ["ลูกค้า", "ช่าง"]:
-                contact_name = f"คุณ{c_name}"
+        contact_name, phone_number = extract_customer_contact(full_text)
 
-        phone_number = ""
-        all_phones = re.findall(r"0[689]\d{8}", full_text)
-        for ph in all_phones:
-            if ph not in TECH_PHONES:
-                phone_number = ph
-                break
-
-        # จัดข้อความผู้ติดต่อ
         contact_disp = ""
         if contact_name and phone_number:
             contact_disp = f"ติดต่อ{contact_name} : {phone_number}"
