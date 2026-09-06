@@ -20,7 +20,6 @@ MAIN_ZONES = [
     "วังทองหลาง",
 ]
 
-# รวมเบอร์ช่างในทีมทั้งหมดเพื่อป้องกันไม่ให้ดึงมาเป็นเบอร์ลูกค้า
 TECH_PHONES = [
     "0820054606", "0970642598", "0820054570", "0834903149",
     "0910024273", "0824669506", "0993515969", "0826779358",
@@ -34,7 +33,7 @@ def clean_text(text: str) -> str:
 
 
 def extract_appointment_info(full_text: str) -> dict:
-    """ดึงวันที่และเวลานัดหมายแบบเจาะจง รองรับ Log HOLD SLA หลายรูปแบบ"""
+    """ดึงวันที่และเวลานัดหมายจาก Log / HOLD SLA"""
     
     # 1. ค้นหา Pattern 'to DD/MM/YY HH:MM' หรือ 'to DD/MM/YYYY HH:MM'
     hold_matches = re.findall(
@@ -58,7 +57,7 @@ def extract_appointment_info(full_text: str) -> dict:
                 "datetime_obj": dt_obj or datetime.max
             }
 
-    # 2. ค้นหา Pattern ภาษาไทย เช่น 'วันที่ 4-9-69 เวลา 15:00' หรือ 'วันที่ 07/09/26 เวลา 15:00'
+    # 2. ค้นหา Pattern ภาษาไทย เช่น 'วันที่ 07/09/26 เวลา 09:00'
     thai_date_match = re.search(
         r"วันที่\s*(\d{1,2}[/\.-]\d{1,2}[/\.-]\d{2,4})\s*เวลา\s*(\d{1,2}[:\.]\d{2})", full_text, re.IGNORECASE
     )
@@ -80,7 +79,7 @@ def extract_appointment_info(full_text: str) -> dict:
                 "datetime_obj": dt_obj or datetime.max
             }
 
-    # 3. ค้นหา Pattern วันที่ + เวลา ทั่วไป
+    # 3. ค้นหา General Match
     text_without_expected = re.sub(
         r"ExpectedDate\s*:\s*\d{1,2}[/\.-]\d{1,2}[/\.-]\d{2,4}\s+\d{1,2}[:\.]\d{2}",
         "",
@@ -118,37 +117,41 @@ def extract_appointment_info(full_text: str) -> dict:
 
 
 def extract_circuit_id(full_text: str) -> str:
-    """ดึง Circuit ID ที่ถูกต้อง"""
+    """ดึง Circuit ID จาก Subject หรือ Body"""
+    # 1. หาจาก Subject/Pattern เช่น |J01735|
+    match_pipe = re.search(r"\|([A-Z]{1,4}\d{4,8}[A-Z]?)\|", full_text)
+    if match_pipe:
+        return match_pipe.group(1).upper()
+
+    # 2. หาจากคำว่า Circuit:
     match_direct = re.search(r"Circuit\s*(?:ID)?\s*[:\=]?\s*([A-Z]{1,4}\d{4,8}[A-Z]?)", full_text, re.IGNORECASE)
     if match_direct:
         return match_direct.group(1).upper()
 
+    # 3. Pattern ทั่วไป เช่น J01735, V16239B
     matches = re.findall(r"\b([VJIWS][D]?\d{4,6}[A-Z]?)\b", full_text, re.IGNORECASE)
     if matches:
         return matches[0].upper()
-
-    matches_gen = re.findall(r"\b([A-Z]{1,3}\d{4,7}[A-Z]?)\b", full_text)
-    for m in matches_gen:
-        if not re.match(r"^A\d{7,}$", m):
-            return m
 
     return ""
 
 
 def extract_customer_contact(full_text: str) -> tuple[str, str]:
-    """ดึงชื่อและเบอร์ติดต่อลูกค้า โดยไม่ดึงเบอร์ช่าง"""
+    """ดึงชื่อและเบอร์ติดต่อลูกค้า โดยคลีน 'คุณ คุณ' ซ้ำออก"""
     contact_name = ""
     phone_number = ""
 
-    # 1. หาเบอร์ที่ไม่ใช่เบอร์ช่าง
+    # 1. ดึงเบอร์ลูกค้า (ข้ามเบอร์ช่าง)
     all_phones = re.findall(r"0[689]\d{8}", full_text)
     for ph in all_phones:
         if ph not in TECH_PHONES:
             phone_number = ph
             break
 
-    # 2. หาชื่อลูกค้า
-    name_m = re.search(r"(?:คุณ|Khun)\s*([ก-๙a-zA-Z]{2,15})", full_text)
+    # 2. ดึงชื่อลูกค้า
+    # คลีนคำว่า 'คุณ คุณ' หรือ 'คุณคุณ' ใน Text ก่อน
+    cleaned_text_for_name = re.sub(r"(?:คุณ\s*){2,}", "คุณ ", full_text)
+    name_m = re.search(r"(?:คุณ|Khun)\s*([ก-๙a-zA-Z]{2,15})", cleaned_text_for_name)
     if name_m:
         c_name = name_m.group(1).strip()
         invalid_words = ["ลูกค้า", "ช่าง", "แจ้ง", "เสีย", "ไม่รับสาย", "ขอ", "ติดตาม", "มอนิเตอร์", "ส่งมอบ"]
@@ -201,7 +204,7 @@ def parse_and_group_by_zone(
         full_text = f"{ticket_text} {circuit_text} {raw_json_str}"
 
         # -------------------------------------------------------------
-        # 0. ตรวจสอบตั๋วปิดงาน (ตัดเฉพาะ "ช่างแจ้งปิดงาน" หรือ "ขอปิดงาน")
+        # 0. ตรวจสอบตั๋วปิดงาน (เฉพาะ "ช่างแจ้งปิดงาน" หรือ "ขอปิดงาน")
         # -------------------------------------------------------------
         if re.search(r"ช่าง(?:พื้นที่)?\s*.*?\s*ขอปิดงาน|ช่างแจ้งปิดงาน", full_text):
             continue
@@ -239,7 +242,6 @@ def parse_and_group_by_zone(
         
         location_address = re.sub(r"^(?:T?\d+|LOCATION VCARE:)\s*", "", location_address, flags=re.IGNORECASE)
         location_address = re.sub(r"\s*(ไม่พบข้อมูล|กรุงเทพมหานคร|\d{5}).*", "", location_address, flags=re.IGNORECASE)
-        location_address = re.sub(r"\s*(คลองเตยเหนือ|คลองเตย|คลองตันเหนือ|คลองตัน|ห้วยขวาง|บางกะปิ|สามเสนนอก|วัฒนา|พระโขนง|แขวง).*$", "", location_address, flags=re.IGNORECASE)
         location_address = clean_text(location_address)
 
         circuit_disp = f"Circuit: {circuit_id} {location_address}".strip() if circuit_id else location_address
