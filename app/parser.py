@@ -20,10 +20,11 @@ MAIN_ZONES = [
     "วังทองหลาง",
 ]
 
+# รวมเบอร์ช่างในทีมทั้งหมดเพื่อป้องกันไม่ให้ดึงมาเป็นเบอร์ลูกค้า
 TECH_PHONES = [
     "0820054606", "0970642598", "0820054570", "0834903149",
     "0910024273", "0824669506", "0993515969", "0826779358",
-    "0968950525", "0852151700", "0829935069"
+    "0968950525", "0852151700", "0829935069", "0829935011"
 ]
 
 
@@ -33,8 +34,9 @@ def clean_text(text: str) -> str:
 
 
 def extract_appointment_info(full_text: str) -> dict:
-    """ดึงวันที่และเวลานัดหมายแบบครอบคลุม ป้องกัน Ticket หลุด"""
-    # 1. ค้นหา Pattern HOLD SLA (เช่น to 06/09/26 09:00)
+    """ดึงวันที่และเวลานัดหมายแบบเจาะจง รองรับ Log HOLD SLA หลายรูปแบบ"""
+    
+    # 1. ค้นหา Pattern 'to DD/MM/YY HH:MM' หรือ 'to DD/MM/YYYY HH:MM'
     hold_matches = re.findall(
         r"(?:to|-|ถึง)\s*(\d{1,2}[/\.-]\d{1,2}[/\.-]\d{2,4})\s*(\d{1,2}[:\.]\d{2})", full_text, re.IGNORECASE
     )
@@ -56,7 +58,29 @@ def extract_appointment_info(full_text: str) -> dict:
                 "datetime_obj": dt_obj or datetime.max
             }
 
-    # 2. ค้นหา Pattern วันที่ + เวลา General
+    # 2. ค้นหา Pattern ภาษาไทย เช่น 'วันที่ 4-9-69 เวลา 15:00' หรือ 'วันที่ 07/09/26 เวลา 15:00'
+    thai_date_match = re.search(
+        r"วันที่\s*(\d{1,2}[/\.-]\d{1,2}[/\.-]\d{2,4})\s*เวลา\s*(\d{1,2}[:\.]\d{2})", full_text, re.IGNORECASE
+    )
+    if thai_date_match:
+        t_date, t_time = thai_date_match.group(1), thai_date_match.group(2)
+        h_parts = re.split(r"[/\.-]", t_date)
+        if len(h_parts) == 3:
+            h_year = f"20{h_parts[2]}" if len(h_parts[2]) == 2 else h_parts[2]
+            time_clean = t_time.replace(".", ":")
+            dt_obj = None
+            try:
+                dt_obj = datetime.strptime(f"{h_parts[0].zfill(2)}/{h_parts[1].zfill(2)}/{h_year} {time_clean}", "%d/%m/%Y %H:%M")
+            except ValueError:
+                pass
+
+            return {
+                "date": f"{h_parts[0].zfill(2)}/{h_parts[1].zfill(2)}/{h_year}",
+                "time": f"{time_clean} น.",
+                "datetime_obj": dt_obj or datetime.max
+            }
+
+    # 3. ค้นหา Pattern วันที่ + เวลา ทั่วไป
     text_without_expected = re.sub(
         r"ExpectedDate\s*:\s*\d{1,2}[/\.-]\d{1,2}[/\.-]\d{2,4}\s+\d{1,2}[:\.]\d{2}",
         "",
@@ -85,7 +109,7 @@ def extract_appointment_info(full_text: str) -> dict:
                 "datetime_obj": dt_obj or datetime.max
             }
 
-    # Fallback กรณีหาวันนัดไม่เจอ ให้ใช้วันปัจจุบันเพื่อไม่ให้ Ticket หลุดหาย
+    # Fallback
     return {
         "date": "ไม่ระบุวัน",
         "time": "ไม่ระบุเวลา",
@@ -112,38 +136,25 @@ def extract_circuit_id(full_text: str) -> str:
 
 
 def extract_customer_contact(full_text: str) -> tuple[str, str]:
-    """
-    ดึงชื่อและเบอร์ติดต่อลูกค้า โดยตัดข้อความส่วนเกินและคำว่า 'คุณ' ซ้ำ
-    """
+    """ดึงชื่อและเบอร์ติดต่อลูกค้า โดยไม่ดึงเบอร์ช่าง"""
     contact_name = ""
     phone_number = ""
 
-    # 1. ค้นหาเบอร์โทรศัพท์ก่อน
-    issue_section = re.search(r"(?:ลูกค้าแจ้งเหตุเสีย|แจ้งเหตุเสีย|รายละเอียดปัญหา)(.*?)(?:HOLD SLA|SMC|Add Activity|WONUM|$)", full_text, re.IGNORECASE)
-    target_text = issue_section.group(1) if issue_section else full_text
-
-    phones_in_issue = re.findall(r"0[689]\d{8}", target_text)
-    for ph in phones_in_issue:
+    # 1. หาเบอร์ที่ไม่ใช่เบอร์ช่าง
+    all_phones = re.findall(r"0[689]\d{8}", full_text)
+    for ph in all_phones:
         if ph not in TECH_PHONES:
             phone_number = ph
             break
 
-    if not phone_number:
-        all_phones = re.findall(r"0[689]\d{8}", full_text)
-        for ph in all_phones:
-            if ph not in TECH_PHONES:
-                phone_number = ph
-                break
-
-    # 2. ค้นหาชื่อผู้ติดต่อ (จำกัดความยาวไม่เกิน 15 ตัวอักษร เพื่อไม่ให้ดึงประโยคมา)
-    name_m = re.search(r"(?:คุณ|Khun|ติดต่อ)\s*([ก-๙a-zA-Z]{2,15})", target_text)
+    # 2. หาชื่อลูกค้า
+    name_m = re.search(r"(?:คุณ|Khun)\s*([ก-๙a-zA-Z]{2,15})", full_text)
     if name_m:
         c_name = name_m.group(1).strip()
-        invalid_words = ["ลูกค้า", "ช่าง", "แจ้ง", "เสีย", "ไม่รับสาย", "ขอ", "ติดตาม", "มอนิเตอร์"]
+        invalid_words = ["ลูกค้า", "ช่าง", "แจ้ง", "เสีย", "ไม่รับสาย", "ขอ", "ติดตาม", "มอนิเตอร์", "ส่งมอบ"]
         if not any(word in c_name for word in invalid_words):
             contact_name = c_name
 
-    # ปรับแต่งคำว่า คุณ ไม่ให้ซ้ำซ้อน
     if contact_name:
         contact_name = re.sub(r"^คุณ+", "", contact_name)
         contact_name = f"คุณ{contact_name}"
@@ -190,7 +201,7 @@ def parse_and_group_by_zone(
         full_text = f"{ticket_text} {circuit_text} {raw_json_str}"
 
         # -------------------------------------------------------------
-        # 0. ตรวจสอบตั๋วปิดงาน (เจาะจงเฉพาะวลีปิดงานจริงๆ)
+        # 0. ตรวจสอบตั๋วปิดงาน (ตัดเฉพาะ "ช่างแจ้งปิดงาน" หรือ "ขอปิดงาน")
         # -------------------------------------------------------------
         if re.search(r"ช่าง(?:พื้นที่)?\s*.*?\s*ขอปิดงาน|ช่างแจ้งปิดงาน", full_text):
             continue
