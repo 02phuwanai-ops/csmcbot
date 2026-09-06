@@ -278,20 +278,20 @@ class UpdateTTClient:
         if not log_text:
             return result
 
-        # ลบ HTML Tags และจัดรูปแบบให้อยู่ในบรรทัดเดียว
+        # ล้าง HTML Tags และจัดรูปแบบข้อความ
         clean_text = re.sub(r'<[^>]+>', ' ', log_text)
         clean_text = re.sub(r'\s+', ' ', clean_text)
 
         if "HOLD" in clean_text.upper():
             result["is_hold"] = True
 
-        # 🎯 ดึงเฉพาะวันที่และเวลาหลังคำว่า "to" ในส่วน HOLD SLA เท่านั้น
-        # เช่น จับจาก "HOLD SLA (... to 06/09/26 08:30)" -> ได้ "06/09/26 08:30"
-        hold_to_match = re.search(r'HOLD\s+SLA[^\)]*?\bto\s+(\d{1,2}/\d{1,2}/\d{2,4}\s+\d{1,2}:\d{2})', clean_text, re.IGNORECASE)
-        
-        if hold_to_match:
-            raw_dt = hold_to_match.group(1).strip()
-            # แปลงให้อยู่ในรูปแบบ DD/MM/YYYY เวลา HH:MM น.
+        # 🎯 Regex เจาะจงแพทเทิร์น: HOLD SLA (... to DD/MM/YY HH:MM)
+        # ตัวอย่าง: Narong Songnimit HOLD SLA (05/09/26 22:15 to 06/09/26 09:00)
+        pattern = r'HOLD\s+SLA\s*\([^)]*?\bto\s+(\d{1,2}/\d{1,2}/\d{2,4}\s+\d{1,2}:\d{2})\)'
+        match = re.search(pattern, clean_text, re.IGNORECASE)
+
+        if match:
+            raw_dt = match.group(1).strip() # จะได้ เช่น "06/09/26 09:00" หรือ "07/09/26 13:00"
             parts = raw_dt.split()
             if len(parts) == 2:
                 d_p = parts[0].split('/')
@@ -303,14 +303,10 @@ class UpdateTTClient:
                     result["reschedule_time"] = raw_dt
             else:
                 result["reschedule_time"] = raw_dt
-        else:
-            # ค้นหาคำว่า to ทั่วไปในกรณีที่แพทเทิร์นไม่ตรงกับวงเล็บ
-            to_matches = re.findall(r'\bto\s+(\d{1,2}/\d{1,2}/\d{2,4}\s+\d{1,2}:\d{2})', clean_text, re.IGNORECASE)
-            if to_matches:
-                result["reschedule_time"] = to_matches[-1].strip()
 
-        reason_match = re.search(r'(เนื่องจาก.*)', clean_text)
+        # 🎯 ดึงสาเหตุที่ HOLD
+        reason_match = re.search(r'เนื่องจาก\s*([^\s<]+(?:\s+[^\s<]+)*)', clean_text)
         if reason_match:
-            result["reason"] = reason_match.group(1).strip()
+            result["reason"] = reason_match.group(0).strip()
 
         return result
