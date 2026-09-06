@@ -233,20 +233,21 @@ class UpdateTTClient:
 
                 result_dict = data if isinstance(data, dict) else {"data": data}
 
-                # 🎯 1. ดึง Activity Log ทั้งหมดเพื่อหาเวลา HOLD SLA
+                # 1. ดึง Activity Log
                 activity_log_text = self.get_ticket_activity_log(ticket_id, zone=target_zone)
                 
-                # 🎯 2. สกัดเวลาจาก Log
+                # 2. แกะเวลา HOLD SLA จาก Log
                 hold_info = self.parse_hold_sla(activity_log_text, raw_data=result_dict)
                 result_dict["hold_info"] = hold_info
 
-                # 🎯 3. เขียนทับฟิลด์เวลาหลอก (ExpectDate) ด้วยเวลานัดจริงจาก HOLD SLA เพื่อให้บอทแสดงผลถูกต้อง
+                # 3. Override ฟิลด์เวลาทั้งหมดเพื่อความแน่นอนในการส่งข้อความ
                 if hold_info.get("reschedule_time"):
                     real_time = hold_info["reschedule_time"]
                     result_dict["ExpectDate"] = real_time
                     result_dict["appointmentDate"] = real_time
                     result_dict["appointment_date"] = real_time
                     result_dict["appointDate"] = real_time
+                    result_dict["appoint_date"] = real_time
 
                 return result_dict
             elif res.status_code == 404 and retry:
@@ -277,22 +278,36 @@ class UpdateTTClient:
         if not log_text:
             return result
 
-        # 🎯 ล้าง HTML Tag ออกทั้งหมด เพื่อให้เหลือแต่ข้อความล้วน
+        # ลบ HTML Tags และจัดรูปแบบให้อยู่ในบรรทัดเดียว
         clean_text = re.sub(r'<[^>]+>', ' ', log_text)
         clean_text = re.sub(r'\s+', ' ', clean_text)
 
         if "HOLD" in clean_text.upper():
             result["is_hold"] = True
 
-        # 🎯 ค้นหาคำว่า "to [วันที่ เวลา]" เช่น "to 06/09/26 09:00" หรือ "to 06/09/26 08:30"
-        to_matches = re.findall(r'to\s+(\d{1,2}/\d{1,2}/\d{2,4}\s+\d{1,2}:\d{2})', clean_text, re.IGNORECASE)
-        if to_matches:
-            result["reschedule_time"] = to_matches[-1].strip()
+        # 🎯 ดึงเฉพาะวันที่และเวลาหลังคำว่า "to" ในส่วน HOLD SLA เท่านั้น
+        # เช่น จับจาก "HOLD SLA (... to 06/09/26 08:30)" -> ได้ "06/09/26 08:30"
+        hold_to_match = re.search(r'HOLD\s+SLA[^\)]*?\bto\s+(\d{1,2}/\d{1,2}/\d{2,4}\s+\d{1,2}:\d{2})', clean_text, re.IGNORECASE)
+        
+        if hold_to_match:
+            raw_dt = hold_to_match.group(1).strip()
+            # แปลงให้อยู่ในรูปแบบ DD/MM/YYYY เวลา HH:MM น.
+            parts = raw_dt.split()
+            if len(parts) == 2:
+                d_p = parts[0].split('/')
+                if len(d_p) == 3:
+                    dd, mm, yy = d_p[0].zfill(2), d_p[1].zfill(2), d_p[2]
+                    yyyy = f"20{yy}" if len(yy) == 2 else yy
+                    result["reschedule_time"] = f"{dd}/{mm}/{yyyy} เวลา {parts[1]} น."
+                else:
+                    result["reschedule_time"] = raw_dt
+            else:
+                result["reschedule_time"] = raw_dt
         else:
-            # สำรองค้นหาแพทเทิร์นวันที่แบบทั่วไปใน Log
-            time_matches = re.findall(r'(\d{1,2}/\d{1,2}/\d{2,4}\s+\d{1,2}:\d{2})', clean_text)
-            if time_matches:
-                result["reschedule_time"] = time_matches[-1].strip()
+            # ค้นหาคำว่า to ทั่วไปในกรณีที่แพทเทิร์นไม่ตรงกับวงเล็บ
+            to_matches = re.findall(r'\bto\s+(\d{1,2}/\d{1,2}/\d{2,4}\s+\d{1,2}:\d{2})', clean_text, re.IGNORECASE)
+            if to_matches:
+                result["reschedule_time"] = to_matches[-1].strip()
 
         reason_match = re.search(r'(เนื่องจาก.*)', clean_text)
         if reason_match:
