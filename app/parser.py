@@ -41,18 +41,17 @@ def extract_appointment_info(full_text: str, target_date_short: str) -> dict:
     day, month = parts[0], parts[1]
     raw_year = parts[2]
 
-    # คำนวณปี 2 หลัก และ 4 หลัก ป้องกันการซ้ำซ้อน (202026)
     year_short = raw_year[-2:]
     year_full = f"20{year_short}"
 
-    # 1. ค้นหา Pattern ช่วงวันที่ HOLD SLA: to DD/MM/YY(YY) HH:MM
+    # 1. ค้นหา Pattern HOLD SLA แบบยืดหยุ่นสูงสุด (รองรับทั้ง to, TO, -, ถึง และเว้นวรรคทุกแบบ)
+    # จับเฉพาะวันที่และเวลาตัวหลังสุดใน Log HOLD SLA
     hold_matches = re.findall(
-        r"to\s+(\d{2}/\d{2}/\d{2,4})\s+(\d{1,2}[:\.]\d{2})", full_text, re.IGNORECASE
+        r"(?:to|-|ถึง)\s*(\d{2}/\d{2}/\d{2,4})\s*(\d{1,2}[:\.]\d{2})", full_text, re.IGNORECASE
     )
     if hold_matches:
         last_date, last_time = hold_matches[-1]
         
-        # จัดรูปแบบวันที่ปลด Hold SLA ให้ถูกต้องโดยตรง
         h_parts = last_date.split("/")
         h_year = f"20{h_parts[2]}" if len(h_parts[2]) == 2 else h_parts[2]
         time_clean = last_time.replace(".", ":")
