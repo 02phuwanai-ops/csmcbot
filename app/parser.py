@@ -32,11 +32,10 @@ def clean_text(text: str) -> str:
     """ล้างช่องว่างส่วนเกิน"""
     return re.sub(r"\s+", " ", text or "").strip()
 
-
 def extract_appointment_info(full_text: str, target_date_short: str) -> dict:
     """
     ดึงวันที่และเวลานัดหมายจาก Log / HOLD SLA
-    เช่น: HOLD SLA (07/06/26 17:30 to 04/09/26 14:00) หรือ 04/09/2026 14:00
+    เช่น: HOLD SLA (05/09/26 22:15 to 06/09/26 09:00) หรือ 04/09/2026 14:00
     """
     parts = target_date_short.split("/")
     day, month = parts[0], parts[1]
@@ -52,15 +51,18 @@ def extract_appointment_info(full_text: str, target_date_short: str) -> dict:
     )
     if hold_matches:
         last_date, last_time = hold_matches[-1]
-        # ตรวจสอบว่าตรงกับวันที่เป้าหมายหรือไม่
-        if last_date in [f"{day}/{month}/{year_short}", f"{day}/{month}/{year_full}"]:
-            time_clean = last_time.replace(".", ":")
-            return {
-                "date": f"{day}/{month}/{year_full}",
-                "time": f"{time_clean} น.",
-            }
+        
+        # จัดรูปแบบวันที่ปลด Hold SLA ให้ถูกต้องโดยตรง
+        h_parts = last_date.split("/")
+        h_year = f"20{h_parts[2]}" if len(h_parts[2]) == 2 else h_parts[2]
+        time_clean = last_time.replace(".", ":")
+        
+        return {
+            "date": f"{h_parts[0]}/{h_parts[1]}/{h_year}",
+            "time": f"{time_clean} น.",
+        }
 
-    # 2. ค้นหา Pattern ทั่วไปที่มีวันที่ตรงกับ target_date_short ตามด้วยเวลา
+    # 2. ค้นหา Pattern ทั่วไปกรณีไม่มี Log HOLD SLA
     date_pattern = f"({re.escape(f'{day}/{month}/{year_short}')}|{re.escape(f'{day}/{month}/{year_full}')})"
     general_match = re.search(
         rf"{date_pattern}\s+(\d{{1,2}}[\.:]\d{{2}})", full_text
@@ -73,7 +75,6 @@ def extract_appointment_info(full_text: str, target_date_short: str) -> dict:
         }
 
     return None
-
 
 def parse_and_group_by_zone(
     raw_tickets_detail: list[dict],
