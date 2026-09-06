@@ -277,7 +277,7 @@ def parse_and_group_by_zone(
     parsed_tickets.sort(key=lambda x: x["datetime_obj"])
 
     # -------------------------------------------------------------
-    # 6. สร้าง Output แยกหมวดหมู่
+    # 6. สร้าง Output แยกหมวดหมู่ (จัด Format หน้า LINE ให้โปรและอ่านง่าย)
     # -------------------------------------------------------------
     today_tickets = [t for t in parsed_tickets if t["appt_date"] == today_formatted]
 
@@ -288,7 +288,7 @@ def parse_and_group_by_zone(
     if today_tickets:
         for t in today_tickets:
             lines = [
-                f"🎫 Ticket : {t['ticket_id']}",
+                f"🎫 : {t['ticket_id']}",
                 f"{t['company_info']}"
             ]
             if t['contact_str']:
@@ -299,13 +299,13 @@ def parse_and_group_by_zone(
     else:
         output_sections.append("ไม่มีงานนัดวันนี้")
 
-    output_sections.append("\n" + "="*30 + "\n")
+    output_sections.append("----------------------------------")
 
     # ส่วนที่ 2: งานค้างทั้งหมด
     output_sections.append("📋 [ งานค้างทั้งหมด (เรียงตามวันนัด) ]")
     for t in parsed_tickets:
         lines = [
-            f"🎫 Ticket : {t['ticket_id']}",
+            f"🎫 : {t['ticket_id']}",
             f"{t['company_info']}"
         ]
         if t['contact_str']:
