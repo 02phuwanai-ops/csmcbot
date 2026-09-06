@@ -32,10 +32,11 @@ def clean_text(text: str) -> str:
     """ล้างช่องว่างส่วนเกิน"""
     return re.sub(r"\s+", " ", text or "").strip()
 
+
 def extract_appointment_info(full_text: str, target_date_short: str) -> dict:
     """
     ดึงวันที่และเวลานัดหมายจาก Log / HOLD SLA
-    เช่น: HOLD SLA (05/09/26 22:15 to 06/09/26 09:00) หรือ 04/09/2026 14:00
+    และป้องกันการดึงค่าจาก ExpectedDate
     """
     parts = target_date_short.split("/")
     day, month = parts[0], parts[1]
@@ -44,14 +45,12 @@ def extract_appointment_info(full_text: str, target_date_short: str) -> dict:
     year_short = raw_year[-2:]
     year_full = f"20{year_short}"
 
-    # 1. ค้นหา Pattern HOLD SLA แบบยืดหยุ่นสูงสุด (รองรับทั้ง to, TO, -, ถึง และเว้นวรรคทุกแบบ)
-    # จับเฉพาะวันที่และเวลาตัวหลังสุดใน Log HOLD SLA
+    # 1. ค้นหา Pattern HOLD SLA ก่อนเสมอ (เช่น: to 06/09/26 09:00 หรือ HOLD SLA ... 09:00)
     hold_matches = re.findall(
         r"(?:to|-|ถึง)\s*(\d{2}/\d{2}/\d{2,4})\s*(\d{1,2}[:\.]\d{2})", full_text, re.IGNORECASE
     )
     if hold_matches:
         last_date, last_time = hold_matches[-1]
-        
         h_parts = last_date.split("/")
         h_year = f"20{h_parts[2]}" if len(h_parts[2]) == 2 else h_parts[2]
         time_clean = last_time.replace(".", ":")
@@ -61,10 +60,19 @@ def extract_appointment_info(full_text: str, target_date_short: str) -> dict:
             "time": f"{time_clean} น.",
         }
 
-    # 2. ค้นหา Pattern ทั่วไปกรณีไม่มี Log HOLD SLA
+    # 2. ตัดข้อความช่วง 'ExpectedDate : XX/XX/XX XX:XX' ออก ชั่วคราว
+    # ป้องกันไม่ให้ General Match หลุดไปจับเวลา SLA ของระบบ
+    text_without_expected = re.sub(
+        r"ExpectedDate\s*:\s*\d{2}/\d{2}/\d{2,4}\s+\d{1,2}[:\.]\d{2}",
+        "",
+        full_text,
+        flags=re.IGNORECASE
+    )
+
+    # 3. ค้นหา Pattern วันที่+เวลา ทั่วไป (หลังจากตัด ExpectedDate ออกแล้ว)
     date_pattern = f"({re.escape(f'{day}/{month}/{year_short}')}|{re.escape(f'{day}/{month}/{year_full}')})"
     general_match = re.search(
-        rf"{date_pattern}\s+(\d{{1,2}}[\.:]\d{{2}})", full_text
+        rf"{date_pattern}\s+(\d{{1,2}}[\.:]\d{{2}})", text_without_expected
     )
     if general_match:
         time_clean = general_match.group(2).replace(".", ":")
@@ -74,6 +82,7 @@ def extract_appointment_info(full_text: str, target_date_short: str) -> dict:
         }
 
     return None
+
 
 def parse_and_group_by_zone(
     raw_tickets_detail: list[dict],
@@ -107,7 +116,11 @@ def parse_and_group_by_zone(
 
         ticket_text = clean_text(soup_ticket.get_text(separator=" "))
         circuit_text = clean_text(soup_circuit.get_text(separator=" "))
-        full_text = f"{ticket_text} {circuit_text}"
+        
+        # ดึงข้อความดิบจาก res_json ทั้งหมด (รวม action_log / history) ป้องกันข้อมูล Log ตกหล่น
+        raw_json_str = clean_text(str(res_json))
+        
+        full_text = f"{ticket_text} {circuit_text} {raw_json_str}"
 
         # -------------------------------------------------------------
         # 1. เช็กนัดหมายว่าตรงกับ "วันนี้" หรือไม่ (ถ้าไม่ตรงให้ข้าม)
