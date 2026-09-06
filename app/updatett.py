@@ -180,6 +180,12 @@ class UpdateTTClient:
             except Exception as e:
                 print(f"❌ Error fetching ticket list: {e}")
 
+        # 🎯 เพิ่มระบบ Auto Re-login: หากดึงแล้วได้ 0 รายการ และยังไม่ได้ลอง retry
+        if retry:
+            print("🔄 ไม่พบตั๋วในรอบแรก กำลังลอง Re-login ขอ Cookie ใหม่และยิงซ้ำอัตโนมัติ...")
+            self.ensure_authenticated_session(force_refresh=True)
+            return self.fetch_all_tickets_from_web(zone=zone, worktype=worktype, retry=False)
+
         print("⚠️ ทดลองทุกรูปแบบแล้ว ไม่พบตั๋วในระบบ")
         return []
 
@@ -302,12 +308,11 @@ class UpdateTTClient:
             result["is_hold"] = True
 
         # 🎯 Regex เจาะจงแพทเทิร์น: HOLD SLA (... to DD/MM/YY HH:MM)
-        # ตัวอย่าง: Narong Songnimit HOLD SLA (05/09/26 22:15 to 06/09/26 09:00)
         pattern = r'HOLD\s+SLA\s*\([^)]*?\bto\s+(\d{1,2}/\d{1,2}/\d{2,4}\s+\d{1,2}:\d{2})\)'
         match = re.search(pattern, clean_text, re.IGNORECASE)
 
         if match:
-            raw_dt = match.group(1).strip() # จะได้ เช่น "06/09/26 09:00" หรือ "07/09/26 13:00"
+            raw_dt = match.group(1).strip()
             parts = raw_dt.split()
             if len(parts) == 2:
                 d_p = parts[0].split('/')
