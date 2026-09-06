@@ -86,6 +86,32 @@ def extract_appointment_info(full_text: str) -> dict:
     return None
 
 
+def extract_circuit_id(full_text: str) -> str:
+    """
+    เจาะจงดึง Circuit ID ตาม Format ของ True/Telecom
+    รองรับรูปแบบ เช่น V16239B, WDS51417, J02645, V02616, I84667, S51417
+    และไม่หลุดจับรหัส Account เช่น A23947940
+    """
+    # ค้นหาคำว่า Circuit: หรือ Circuit ID ก่อน
+    match_direct = re.search(r"Circuit\s*(?:ID)?\s*[:\=]?\s*([A-Z]{1,4}\d{4,8}[A-Z]?)", full_text, re.IGNORECASE)
+    if match_direct:
+        return match_direct.group(1).upper()
+
+    # ค้นหา Pattern Circuit ทั่วไป (เช่น V16239B, WDS51417, J02645)
+    # ยกเว้นตัว A ตามด้วยตัวเลขยาวๆ เกิน 7 หลัก (เพราะมักจะเป็น Acc ID)
+    matches = re.findall(r"\b([VJIWS][D]?\d{4,6}[A-Z]?)\b", full_text, re.IGNORECASE)
+    if matches:
+        return matches[0].upper()
+
+    # Pattern สำรองทั่วไป
+    matches_gen = re.findall(r"\b([A-Z]{1,3}\d{4,7}[A-Z]?)\b", full_text)
+    for m in matches_gen:
+        if not re.match(r"^A\d{7,}$", m):  # ข้าม A23947940
+            return m
+
+    return ""
+
+
 def parse_and_group_by_zone(
     raw_tickets_detail: list[dict],
     selected_employees: list = None,
@@ -125,7 +151,7 @@ def parse_and_group_by_zone(
         full_text = f"{ticket_text} {circuit_text} {raw_json_str}"
 
         # -------------------------------------------------------------
-        # 0. กรองตั๋วที่ "ช่างแจ้งปิดงาน" ออก
+        # 0. กรองตั๋วที่ "ช่างแจ้งปิดงาน" หรือ "ขอปิดงาน" ออก
         # -------------------------------------------------------------
         if "ช่างแจ้งปิดงาน" in full_text or "ขอปิดงาน" in full_text:
             continue
@@ -154,9 +180,7 @@ def parse_and_group_by_zone(
         # -------------------------------------------------------------
         # 3. ดึง Circuit ID & ชื่อสถานที่ (กระชับ)
         # -------------------------------------------------------------
-        # จับ Circuit ที่มี Prefix นำหน้า เช่น WDS51417, J02645, V02616
-        circuit_m = re.search(r"\b([A-Z]{1,4}\d{4,8})\b", full_text)
-        circuit_id = circuit_m.group(1) if circuit_m else ""
+        circuit_id = extract_circuit_id(full_text)
 
         loc_m = re.search(
             r"LOCATION[^\:]*:\s*(.*?)(?=\[OPEN\]|SMC|TK:|Splitter|รายชื่อช่าง|Add Activity|WONUM|Link Status|HOLD SLA|$)",
@@ -165,11 +189,11 @@ def parse_and_group_by_zone(
         )
         location_address = clean_text(loc_m.group(1)) if loc_m else ""
         
-        # ตัดข้อความขยะ/ส่วนที่ไม่จำเป็นออก เช่น ไม่พบข้อมูล, ที่อยู่ตำบล/อำเภอ
+        # ตัดข้อความขยะ/ส่วนที่ไม่จำเป็นออก
         location_address = re.sub(r"^(?:T?\d+|LOCATION VCARE:)\s*", "", location_address, flags=re.IGNORECASE)
         location_address = re.sub(r"\s*(ไม่พบข้อมูล|กรุงเทพมหานคร|\d{5}).*", "", location_address, flags=re.IGNORECASE)
-        # ตัดแขวง/เขตออกเพื่อความสั้นกระชับ
-        location_address = re.sub(r"\s*(คลองเตยเหนือ|คลองเตย|คลองตันเหนือ|คลองตัน|ห้วยขวาง|บางกะปิ|สามเสนนอก|วัฒนา|พระโขนง|สุขุมวิท 23 - สุขุมวิท 23).*", "", location_address, flags=re.IGNORECASE)
+        # ตัดแขวง/เขตและคำค้างท้ายออก
+        location_address = re.sub(r"\s*(คลองเตยเหนือ|คลองเตย|คลองตันเหนือ|คลองตัน|ห้วยขวาง|บางกะปิ|สามเสนนอก|วัฒนา|พระโขนง|แขวง).*$", "", location_address, flags=re.IGNORECASE)
         location_address = clean_text(location_address)
 
         circuit_disp = f"Circuit: {circuit_id} {location_address}".strip() if circuit_id else location_address
