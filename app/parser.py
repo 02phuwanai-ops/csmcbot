@@ -141,36 +141,41 @@ def extract_customer_contact(full_text: str) -> tuple[str, str]:
     contact_name = ""
     phone_number = ""
 
-    # 1. ค้นหาเบอร์โทรเจาะจงในโซน "ข้อมูลการติดต่อลูกค้า:"
-    contact_section_m = re.search(
-        r"ข้อมูลการติดต่อลูกค้า\s*:\s*(.*?)(?=Ticket Detail:|Location:|$)", 
-        full_text, 
-        re.IGNORECASE
-    )
-    
-    target_text = contact_section_m.group(1) if contact_section_m else full_text
+    try:
+        # 1. ค้นหาเบอร์โทรเจาะจงในโซน "ข้อมูลการติดต่อลูกค้า:"
+        contact_section_m = re.search(
+            r"ข้อมูลการติดต่อลูกค้า\s*:\s*(.*?)(?=Ticket Detail:|Location:|$)", 
+            full_text, 
+            re.DOTALL | re.IGNORECASE
+        )
+        
+        target_text = contact_section_m.group(1).strip() if contact_section_m else ""
 
-    # ค้นหาเบอร์โทรที่ไม่ใช่เบอร์ช่าง
-    all_phones = re.findall(r"0[689]\d{8}", target_text)
-    for ph in all_phones:
-        if ph not in TECH_PHONES:
-            phone_number = ph
-            break
+        if target_text:
+            # ค้นหาเบอร์โทรที่ไม่ใช่เบอร์ช่าง
+            all_phones = re.findall(r"0[689]\d{8}", target_text)
+            for ph in all_phones:
+                if ph not in TECH_PHONES:
+                    phone_number = ph
+                    break
 
-    # 2. ค้นหาชื่อลูกค้า
-    cleaned_text_for_name = re.sub(r"(?:คุณ\s*){2,}", "คุณ ", target_text)
-    name_m = re.search(r"(?:คุณ|Khun)\s*([ก-๙a-zA-Z]{2,15})", cleaned_text_for_name)
-    if name_m:
-        c_name = name_m.group(1).strip()
-        invalid_words = ["ลูกค้า", "ช่าง", "แจ้ง", "เสีย", "ไม่รับสาย", "ขอ", "ติดตาม", "มอนิเตอร์", "ส่งมอบ", "ไม่มี"]
-        if not any(word in c_name for word in invalid_words):
-            contact_name = c_name
+            # ค้นหาชื่อลูกค้า
+            cleaned_text_for_name = re.sub(r"(?:คุณ\s*){2,}", "คุณ ", target_text)
+            name_m = re.search(r"(?:คุณ|Khun)\s*([ก-๙a-zA-Z]{2,15})", cleaned_text_for_name)
+            if name_m:
+                c_name = name_m.group(1).strip()
+                invalid_words = ["ลูกค้า", "ช่าง", "แจ้ง", "เสีย", "ไม่รับสาย", "ขอ", "ติดตาม", "มอนิเตอร์", "ส่งมอบ", "ไม่มี"]
+                if not any(word in c_name for word in invalid_words):
+                    contact_name = c_name
 
-    if contact_name:
-        contact_name = re.sub(r"^คุณ+", "", contact_name)
-        contact_name = f"คุณ{contact_name}"
+            if contact_name:
+                contact_name = re.sub(r"^คุณ+", "", contact_name)
+                contact_name = f"คุณ{contact_name}"
+    except Exception as e:
+        print(f"Error extracting contact: {e}")
 
     return contact_name, phone_number
+
 
 def parse_and_group_by_zone(
     raw_tickets_detail: list[dict],
@@ -265,18 +270,29 @@ def parse_and_group_by_zone(
             contact_disp = f"ติดต่อ{contact_name}"
         elif phone_number:
             contact_disp = f"ติดต่อ : {phone_number}"
-        # หากไม่มีเบอร์และไม่มีชื่อ contact_disp จะเป็น "" และถูกข้ามไป ไม่แสดงใน LINE
+
+        # -------------------------------------------------------------
+        # 5. เก็บข้อมูลเข้าparsed_tickets (จุดที่ขาดหายไป)
+        # -------------------------------------------------------------
+        parsed_tickets.append({
+            "ticket_id": ticket_id,
+            "company_info": circuit_disp,
+            "contact_str": contact_disp,
+            "appt_date": appt_data["date"],
+            "appt_time": appt_data["time"],
+            "datetime_obj": appt_data["datetime_obj"]
+        })
 
     if not parsed_tickets:
         return "ไม่มีรายการงานซ่อมในระบบ"
 
     # -------------------------------------------------------------
-    # 5. เรียงลำดับงานตาม วันที่ และ เวลา
+    # 6. เรียงลำดับงานตาม วันที่ และ เวลา
     # -------------------------------------------------------------
     parsed_tickets.sort(key=lambda x: x["datetime_obj"])
 
     # -------------------------------------------------------------
-    # 6. สร้าง Output แยกหมวดหมู่ (จัด Format หน้า LINE ให้โปรและอ่านง่าย)
+    # 7. สร้าง Output แยกหมวดหมู่ (จัด Format หน้า LINE ให้โปรและอ่านง่าย)
     # -------------------------------------------------------------
     today_tickets = [t for t in parsed_tickets if t["appt_date"] == today_formatted]
 
