@@ -20,7 +20,6 @@ MAIN_ZONES = [
     "วังทองหลาง",
 ]
 
-# รายการเบอร์ช่างเพื่อคัดออกจากเบอร์ลูกค้า
 TECH_PHONES = [
     "0820054606", "0970642598", "0820054570", "0834903149",
     "0910024273", "0824669506", "0993515969", "0826779358",
@@ -33,12 +32,8 @@ def clean_text(text: str) -> str:
     return re.sub(r"\s+", " ", text or "").strip()
 
 
-def extract_appointment_info(full_text: str, target_date_short: str = "") -> dict:
-    """
-    ดึงวันที่และเวลานัดหมายจาก Log / HOLD SLA
-    และป้องกันการดึงค่าจาก ExpectedDate
-    """
-    # 1. ค้นหา Pattern HOLD SLA ก่อนเสมอ (เช่น: to 06/09/26 09:00 หรือ HOLD SLA ... 09:00)
+def extract_appointment_info(full_text: str) -> dict:
+    """ดึงวันที่และเวลานัดหมายจาก Log / HOLD SLA"""
     hold_matches = re.findall(
         r"(?:to|-|ถึง)\s*(\d{2}/\d{2}/\d{2,4})\s*(\d{1,2}[:\.]\d{2})", full_text, re.IGNORECASE
     )
@@ -60,7 +55,6 @@ def extract_appointment_info(full_text: str, target_date_short: str = "") -> dic
             "datetime_obj": dt_obj or datetime.max
         }
 
-    # 2. ตัดข้อความช่วง 'ExpectedDate : XX/XX/XX XX:XX' ออก ชั่วคราว
     text_without_expected = re.sub(
         r"ExpectedDate\s*:\s*\d{2}/\d{2}/\d{2,4}\s+\d{1,2}[:\.]\d{2}",
         "",
@@ -68,7 +62,6 @@ def extract_appointment_info(full_text: str, target_date_short: str = "") -> dic
         flags=re.IGNORECASE
     )
 
-    # 3. ค้นหา Pattern วันที่ + เวลา ทั่วไป (DD/MM/YY(YY) HH:MM)
     general_match = re.search(
         r"(\d{2}/\d{2}/\d{2,4})\s+(\d{1,2}[\.:]\d{2})", text_without_expected
     )
@@ -99,12 +92,11 @@ def parse_and_group_by_zone(
     target_zones: list = None,
     work_date: str = "",
 ) -> str:
-    """แกะข้อมูล คัดแยกงานนัดวันนี้/งานค้างทั้งหมด และเรียงตามวันที่และเวลา"""
+    """แกะข้อมูล คัดเฉพาะตั๋วที่ยังไม่ปิดงาน จัด Format และเรียงตามลำดับนัดหมาย"""
 
     today_dt = datetime.now()
     today_formatted = work_date if work_date else today_dt.strftime("%d/%m/%Y")
     
-    # แปลงวันที่เป้าหมายให้อยู่ในรูปแบบ DD/MM/YYYY สำหรับเปรียบเทียบ
     t_parts = today_formatted.split("/")
     if len(t_parts[2]) == 2:
         today_formatted = f"{t_parts[0]}/{t_parts[1]}/20{t_parts[2]}"
@@ -133,6 +125,12 @@ def parse_and_group_by_zone(
         full_text = f"{ticket_text} {circuit_text} {raw_json_str}"
 
         # -------------------------------------------------------------
+        # 0. กรองตั๋วที่ "ช่างแจ้งปิดงาน" ออก
+        # -------------------------------------------------------------
+        if "ช่างแจ้งปิดงาน" in full_text or "ขอปิดงาน" in full_text:
+            continue
+
+        # -------------------------------------------------------------
         # 1. ดึงข้อมูลวัน/เวลานัดหมาย
         # -------------------------------------------------------------
         appt_data = extract_appointment_info(full_text)
@@ -154,9 +152,10 @@ def parse_and_group_by_zone(
             ticket_id = ticket_m.group(1) if ticket_m else "N/A"
 
         # -------------------------------------------------------------
-        # 3. ดึง Circuit ID & ชื่อบริษัท/สถานที่
+        # 3. ดึง Circuit ID & ชื่อสถานที่ (กระชับ)
         # -------------------------------------------------------------
-        circuit_m = re.search(r"([A-SU-Z]\d{5,8}|J\d{5,8})", full_text)
+        # จับ Circuit ที่มี Prefix นำหน้า เช่น WDS51417, J02645, V02616
+        circuit_m = re.search(r"\b([A-Z]{1,4}\d{4,8})\b", full_text)
         circuit_id = circuit_m.group(1) if circuit_m else ""
 
         loc_m = re.search(
@@ -165,32 +164,46 @@ def parse_and_group_by_zone(
             re.IGNORECASE,
         )
         location_address = clean_text(loc_m.group(1)) if loc_m else ""
+        
+        # ตัดข้อความขยะ/ส่วนที่ไม่จำเป็นออก เช่น ไม่พบข้อมูล, ที่อยู่ตำบล/อำเภอ
         location_address = re.sub(r"^(?:T?\d+|LOCATION VCARE:)\s*", "", location_address, flags=re.IGNORECASE)
+        location_address = re.sub(r"\s*(ไม่พบข้อมูล|กรุงเทพมหานคร|\d{5}).*", "", location_address, flags=re.IGNORECASE)
+        # ตัดแขวง/เขตออกเพื่อความสั้นกระชับ
+        location_address = re.sub(r"\s*(คลองเตยเหนือ|คลองเตย|คลองตันเหนือ|คลองตัน|ห้วยขวาง|บางกะปิ|สามเสนนอก|วัฒนา|พระโขนง|สุขุมวิท 23 - สุขุมวิท 23).*", "", location_address, flags=re.IGNORECASE)
         location_address = clean_text(location_address)
 
-        company_disp = f"{circuit_id} {location_address}".strip()
+        circuit_disp = f"Circuit: {circuit_id} {location_address}".strip() if circuit_id else location_address
 
         # -------------------------------------------------------------
         # 4. ดึง ชื่อผู้ติดต่อ & เบอร์โทรศัพท์
         # -------------------------------------------------------------
-        contact_name = "ลูกค้า"
-        name_m = re.search(r"(?:ติดต่อ|คุณ|Khun)\s*([ก-๙a-zA-Z]+(?:\s+[ก-๙a-zA-Z]+)?)", full_text)
+        contact_name = ""
+        name_m = re.search(r"(?:คุณ|Khun)\s*([ก-๙a-zA-Z]+)", full_text)
         if name_m:
             c_name = name_m.group(1).strip()
-            contact_name = c_name if c_name.startswith("คุณ") else f"คุณ{c_name}"
+            if c_name not in ["ลูกค้า", "ช่าง"]:
+                contact_name = f"คุณ{c_name}"
 
-        phone_number = "ไม่ระบุ"
+        phone_number = ""
         all_phones = re.findall(r"0[689]\d{8}", full_text)
         for ph in all_phones:
             if ph not in TECH_PHONES:
                 phone_number = ph
                 break
 
+        # จัดข้อความผู้ติดต่อ
+        contact_disp = ""
+        if contact_name and phone_number:
+            contact_disp = f"ติดต่อ{contact_name} : {phone_number}"
+        elif contact_name:
+            contact_disp = f"ติดต่อ{contact_name}"
+        elif phone_number:
+            contact_disp = f"ติดต่อคุณลูกค้า : {phone_number}"
+
         parsed_tickets.append({
             "ticket_id": ticket_id,
-            "company_info": company_disp or "ไม่ระบุสถานที่",
-            "contact_person": contact_name,
-            "phone": phone_number,
+            "company_info": circuit_disp or "ไม่ระบุสถานที่",
+            "contact_str": contact_disp,
             "appt_date": appt_data["date"],
             "appt_time": appt_data["time"],
             "datetime_obj": appt_data["datetime_obj"],
@@ -200,12 +213,12 @@ def parse_and_group_by_zone(
         return "ไม่มีรายการงานซ่อมในระบบ"
 
     # -------------------------------------------------------------
-    # 5. เรียงลำดับงานตาม วันที่ และ เวลา (น้อยไปมาก)
+    # 5. เรียงลำดับงานตาม วันที่ และ เวลา
     # -------------------------------------------------------------
     parsed_tickets.sort(key=lambda x: x["datetime_obj"])
 
     # -------------------------------------------------------------
-    # 6. คัดแยกงานค้างวันนี้ VS งานค้างทั้งหมด
+    # 6. สร้าง Output แยกหมวดหมู่
     # -------------------------------------------------------------
     today_tickets = [t for t in parsed_tickets if t["appt_date"] == today_formatted]
 
@@ -215,27 +228,31 @@ def parse_and_group_by_zone(
     output_sections.append(f"📌 [ งานค้างนัดวันนี้ ({today_formatted}) ]")
     if today_tickets:
         for t in today_tickets:
-            block = (
-                f"Ticket : {t['ticket_id']}\n"
-                f"{t['company_info']}\n"
-                f"ติดต่อ{t['contact_person']} : {t['phone']}\n"
-                f"นัดลูกค้า {t['appt_date']} เวลา {t['appt_time']}"
-            )
-            output_sections.append(block)
+            lines = [
+                f"🎫 Ticket : {t['ticket_id']}",
+                f"{t['company_info']}"
+            ]
+            if t['contact_str']:
+                lines.append(t['contact_str'])
+            lines.append(f"นัดลูกค้า {t['appt_date']} เวลา {t['appt_time']}")
+            
+            output_sections.append("\n".join(lines))
     else:
         output_sections.append("ไม่มีงานนัดวันนี้")
 
     output_sections.append("\n" + "="*30 + "\n")
 
-    # ส่วนที่ 2: งานค้างทั้งหมด (เรียงตามวันที่)
+    # ส่วนที่ 2: งานค้างทั้งหมด
     output_sections.append("📋 [ งานค้างทั้งหมด (เรียงตามวันนัด) ]")
     for t in parsed_tickets:
-        block = (
-            f"Ticket : {t['ticket_id']}\n"
-            f"{t['company_info']}\n"
-            f"ติดต่อ{t['contact_person']} : {t['phone']}\n"
-            f"นัดลูกค้า {t['appt_date']} เวลา {t['appt_time']}"
-        )
-        output_sections.append(block)
+        lines = [
+            f"🎫 Ticket : {t['ticket_id']}",
+            f"{t['company_info']}"
+        ]
+        if t['contact_str']:
+            lines.append(t['contact_str'])
+        lines.append(f"นัดลูกค้า {t['appt_date']} เวลา {t['appt_time']}")
+
+        output_sections.append("\n".join(lines))
 
     return "\n\n".join(output_sections)
