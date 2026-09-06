@@ -137,24 +137,32 @@ def extract_circuit_id(full_text: str) -> str:
 
 
 def extract_customer_contact(full_text: str) -> tuple[str, str]:
-    """ดึงชื่อและเบอร์ติดต่อลูกค้า โดยคลีน 'คุณ คุณ' ซ้ำออก"""
+    """ดึงชื่อและเบอร์ติดต่อลูกค้า โดยเช็กจากส่วนข้อมูลการติดต่อลูกค้าเป็นหลัก"""
     contact_name = ""
     phone_number = ""
 
-    # 1. ดึงเบอร์ลูกค้า (ข้ามเบอร์ช่าง)
-    all_phones = re.findall(r"0[689]\d{8}", full_text)
+    # 1. ค้นหาเบอร์โทรเจาะจงในโซน "ข้อมูลการติดต่อลูกค้า:"
+    contact_section_m = re.search(
+        r"ข้อมูลการติดต่อลูกค้า\s*:\s*(.*?)(?=Ticket Detail:|Location:|$)", 
+        full_text, 
+        re.IGNORECASE
+    )
+    
+    target_text = contact_section_m.group(1) if contact_section_m else full_text
+
+    # ค้นหาเบอร์โทรที่ไม่ใช่เบอร์ช่าง
+    all_phones = re.findall(r"0[689]\d{8}", target_text)
     for ph in all_phones:
         if ph not in TECH_PHONES:
             phone_number = ph
             break
 
-    # 2. ดึงชื่อลูกค้า
-    # คลีนคำว่า 'คุณ คุณ' หรือ 'คุณคุณ' ใน Text ก่อน
-    cleaned_text_for_name = re.sub(r"(?:คุณ\s*){2,}", "คุณ ", full_text)
+    # 2. ค้นหาชื่อลูกค้า
+    cleaned_text_for_name = re.sub(r"(?:คุณ\s*){2,}", "คุณ ", target_text)
     name_m = re.search(r"(?:คุณ|Khun)\s*([ก-๙a-zA-Z]{2,15})", cleaned_text_for_name)
     if name_m:
         c_name = name_m.group(1).strip()
-        invalid_words = ["ลูกค้า", "ช่าง", "แจ้ง", "เสีย", "ไม่รับสาย", "ขอ", "ติดตาม", "มอนิเตอร์", "ส่งมอบ"]
+        invalid_words = ["ลูกค้า", "ช่าง", "แจ้ง", "เสีย", "ไม่รับสาย", "ขอ", "ติดตาม", "มอนิเตอร์", "ส่งมอบ", "ไม่มี"]
         if not any(word in c_name for word in invalid_words):
             contact_name = c_name
 
@@ -163,7 +171,6 @@ def extract_customer_contact(full_text: str) -> tuple[str, str]:
         contact_name = f"คุณ{contact_name}"
 
     return contact_name, phone_number
-
 
 def parse_and_group_by_zone(
     raw_tickets_detail: list[dict],
@@ -247,7 +254,7 @@ def parse_and_group_by_zone(
         circuit_disp = f"Circuit: {circuit_id} {location_address}".strip() if circuit_id else location_address
 
         # -------------------------------------------------------------
-        # 4. ดึง ชื่อผู้ติดต่อ & เบอร์โทรศัพท์
+        # 4. ดึง ชื่อผู้ติดต่อ & เบอร์โทรศัพท์ (ถ้าไม่มีทั้งคู่ ให้เป็นค่าว่าง)
         # -------------------------------------------------------------
         contact_name, phone_number = extract_customer_contact(full_text)
 
@@ -257,16 +264,8 @@ def parse_and_group_by_zone(
         elif contact_name:
             contact_disp = f"ติดต่อ{contact_name}"
         elif phone_number:
-            contact_disp = f"ติดต่อคุณลูกค้า : {phone_number}"
-
-        parsed_tickets.append({
-            "ticket_id": ticket_id,
-            "company_info": circuit_disp or "ไม่ระบุสถานที่",
-            "contact_str": contact_disp,
-            "appt_date": appt_data["date"],
-            "appt_time": appt_data["time"],
-            "datetime_obj": appt_data["datetime_obj"],
-        })
+            contact_disp = f"ติดต่อ : {phone_number}"
+        # หากไม่มีเบอร์และไม่มีชื่อ contact_disp จะเป็น "" และถูกข้ามไป ไม่แสดงใน LINE
 
     if not parsed_tickets:
         return "ไม่มีรายการงานซ่อมในระบบ"
