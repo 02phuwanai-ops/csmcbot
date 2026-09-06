@@ -183,12 +183,15 @@ class UpdateTTClient:
         print(f"🎯 จากทั้งหมด {len(all_tickets)} รายการ -> คัดเหลือเฉพาะช่างในทีม {len(filtered_tickets)} รายการ")
         return filtered_tickets
 
-    def get_ticket_activity_log(self, ticket_id: str, zone: str = "2") -> str:
+    def get_ticket_activity_log(self, ticket_id: str, zone: str = "2", activity_id: str = "") -> str:
         self.ensure_authenticated_session()
         url = f"{self.base_url}/get_activity_detail"
+        
+        # 🎯 เพิ่ม activity ใน Payload เพื่อให้ระบบคืนข้อความ Log ออกมาครบถ้วน
         payload = {
             "ticketID": ticket_id,
             "zone": "2" if zone == "WW BMA East" or not zone else str(zone),
+            "activity": activity_id
         }
 
         try:
