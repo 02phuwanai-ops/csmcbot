@@ -317,7 +317,7 @@ def parse_and_group_by_zone(
     output_sections.append("----------------------------------")
 
     # ส่วนที่ 2: งานค้างทั้งหมด
-    output_sections.append("📋 [ งานค้างทั้งหมด (เรียงตามวันนัด) ]")
+    output_sections.append("📋 [ งานค้างทั้งหมด (ตามวันนัด) ]")
     for t in parsed_tickets:
         lines = [
             f"🎫 : {t['ticket_id']}",
