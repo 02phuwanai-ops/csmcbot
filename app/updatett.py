@@ -20,14 +20,20 @@ class UpdateTTClient:
             "Pollawat",
         ]
 
-        # 2. รายชื่อ 6 เขตที่อนุญาต
+        # 2. รายชื่อ 6 เขต/แขวงที่อนุญาต (รวมแขวงย่อยและคำที่พบในระบบ)
         self.allowed_districts = [
-            "คลองเตย",
-            "ยานนาวา",
-            "ห้วยขวาง",
-            "คันนายาว",
-            "บางกะปิ",
-            "คลองตัน",
+            # 1. บางจาก / พระโขนง
+            "บางจาก", "พระโขนง",
+            # 2. คลองเตย
+            "คลองเตย", "คลองตัน",
+            # 3. บางกะปิ / ห้วยขวาง
+            "บางกะปิ", "ห้วยขวาง", "สามเสนนอก",
+            # 4. คลองตันเหนือ / วัฒนา
+            "คลองตันเหนือ", "วัฒนา", "สุขุมวิท",
+            # 5. จรเข้บัว / ลาดพร้าว
+            "จรเข้บัว", "ลาดพร้าว", "ลาดพร้าววังหิน",
+            # 6. พลับพลา / วังทองหลาง
+            "พลับพลา", "วังทองหลาง",
         ]
 
         # 3. Blacklist เบอร์โทรช่าง
@@ -111,8 +117,15 @@ class UpdateTTClient:
 
         subject_lower = subject.lower()
 
+        # 1. เช็กว่าตรงกับชื่อช่างในทีมหรือไม่
         for target in self.target_technicians:
             if target.lower() in subject_lower:
+                return True
+
+        # 2. ป้องกันตั๋ว HOLD SLA / BMAE4 หลุด (กรณีตั๋วถูกเปลี่ยน Owner ในระบบ)
+        keywords_bypass = ["hold", "slahold", "ww-bmae4-corp", "bmae4"]
+        for kw in keywords_bypass:
+            if kw in subject_lower:
                 return True
 
         return False
