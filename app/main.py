@@ -1,3 +1,4 @@
+# app/main.py
 import os
 import logging
 from datetime import datetime
@@ -75,21 +76,21 @@ def generate_daily_report(selected_zones=None, selected_employees=None, work_dat
     return line_message_text
 
 
-def process_and_send_push(user_id: str):
-    """ส่งผลลัพธ์ผ่าน Push Message แบบ Background Task"""
+def process_and_send_push(target_id: str):
+    """ส่งผลลัพธ์ผ่าน Push Message รองรับทั้ง User ID และ Group ID"""
     try:
         report_text = generate_daily_report()
         if not report_text:
             report_text = "ℹ️ ไม่พบบันทึกงานนัดหมายของช่างในทีมสำหรับวันนี้ครับ"
 
-        line_bot_api.push_message(user_id, TextSendMessage(text=report_text))
+        line_bot_api.push_message(target_id, TextSendMessage(text=report_text))
     except LineBotApiError as e:
         logger.error(f"LINE Push Error ({e.status_code}): {e.error.message}")
     except Exception as e:
         logger.error(f"Error sending push message: {e}")
         try:
             line_bot_api.push_message(
-                user_id,
+                target_id,
                 TextSendMessage(text=f"❌ เกิดข้อผิดพลาดในการดึงข้อมูล: {e}"),
             )
         except Exception:
@@ -98,7 +99,7 @@ def process_and_send_push(user_id: str):
 
 @app.post("/webhook")
 async def callback(request: Request, background_tasks: BackgroundTasks):
-    """Endpoint สำหรับรับ Webhook จาก LINE"""
+    """Endpoint สำหรับรับ Webhook จาก LINE (รองรับทั้งแชตเดี่ยวและกลุ่ม)"""
     signature = request.headers.get("X-Line-Signature", "")
     body = (await request.body()).decode("utf-8")
 
@@ -107,16 +108,25 @@ async def callback(request: Request, background_tasks: BackgroundTasks):
         for event in events:
             if isinstance(event, MessageEvent) and isinstance(event.message, TextMessage):
                 msg_text = event.message.text.strip()
-                user_id = event.source.user_id
+                
+                # 🎯 เช็กประเภทแหล่งที่มา (กลุ่ม, ห้องแชท, หรือผู้ใช้ทั่วไป)
+                source_type = event.source.type
+                if source_type == "group":
+                    target_id = event.source.group_id
+                elif source_type == "room":
+                    target_id = event.source.room_id
+                else:
+                    target_id = event.source.user_id
 
-                if msg_text in ["ดึงงานวันนี้", "งานวันนี้", "job", "Job", "สรุป", "สรุปวันนี้"]:
+                # คีย์เวิร์ดสำหรับดึงรายงาน
+                if msg_text in ["ดึงงานวันนี้", "งานวันนี้", "job", "Job", "สรุป", "สรุปวันนี้", "งาน", "งานค้าง", "report"]:
                     line_bot_api.reply_message(
                         event.reply_token,
                         TextSendMessage(
                             text="⏳ รับคำสั่งเรียบร้อยแล้ว กำลังดึงข้อมูลงานนัดวันนี้ สักครู่นะครับ..."
                         ),
                     )
-                    background_tasks.add_task(process_and_send_push, user_id)
+                    background_tasks.add_task(process_and_send_push, target_id)
 
                 elif msg_text in ["สวัสดี", "เมนู", "help"]:
                     line_bot_api.reply_message(
