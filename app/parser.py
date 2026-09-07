@@ -32,6 +32,29 @@ def clean_text(text: str) -> str:
     return re.sub(r"\s+", " ", text or "").strip()
 
 
+def extract_hold_remark(full_text: str) -> str:
+    """🎯 จุดที่ 1: แกะ Remark หรือเหตุผลการ HOLD SLA ต่อท้ายนัดหมาย"""
+    # 1. หาคำว่า เนื่องจาก ...
+    reason_match = re.search(r"เนื่องจาก\s*([^\s<]+(?:\s+[^\s<]+)*)", full_text)
+    if reason_match:
+        reason = reason_match.group(1).strip()
+        # ลบคำขยะหรือข้อความที่ยาวเกินไป
+        reason = re.split(r"Ticket|Location|SMC|TK:|Splitter", reason, flags=re.IGNORECASE)[0].strip()
+        if reason and len(reason) < 60:
+            return f" ({reason})"
+
+    # 2. หา Pattern สาเหตุสั้นๆ ใน HOLD SLA
+    hold_m = re.search(r"HOLD\s+SLA[^(]*\(([^)]+)\)", full_text, re.IGNORECASE)
+    if hold_m:
+        content = hold_m.group(1).strip()
+        # ถ้ามีคำว่า due to หรือ เนื่องจาก ในวงเล็บ
+        if "due to" in content.lower():
+            sub_reason = content.lower().split("due to")[-1].strip()
+            return f" ({sub_reason})"
+            
+    return ""
+
+
 def extract_appointment_info(full_text: str) -> dict:
     """ดึงวันที่และเวลานัดหมายจาก Log / HOLD SLA"""
     
@@ -118,17 +141,14 @@ def extract_appointment_info(full_text: str) -> dict:
 
 def extract_circuit_id(full_text: str) -> str:
     """ดึง Circuit ID จาก Subject หรือ Body"""
-    # 1. หาจาก Subject/Pattern เช่น |J01735|
     match_pipe = re.search(r"\|([A-Z]{1,4}\d{4,8}[A-Z]?)\|", full_text)
     if match_pipe:
         return match_pipe.group(1).upper()
 
-    # 2. หาจากคำว่า Circuit:
     match_direct = re.search(r"Circuit\s*(?:ID)?\s*[:\=]?\s*([A-Z]{1,4}\d{4,8}[A-Z]?)", full_text, re.IGNORECASE)
     if match_direct:
         return match_direct.group(1).upper()
 
-    # 3. Pattern ทั่วไป เช่น J01735, V16239B
     matches = re.findall(r"\b([VJIWS][D]?\d{4,6}[A-Z]?)\b", full_text, re.IGNORECASE)
     if matches:
         return matches[0].upper()
@@ -142,7 +162,6 @@ def extract_customer_contact(full_text: str) -> tuple[str, str]:
     phone_number = ""
 
     try:
-        # 1. ค้นหาเบอร์โทรเจาะจงในโซน "ข้อมูลการติดต่อลูกค้า:"
         contact_section_m = re.search(
             r"ข้อมูลการติดต่อลูกค้า\s*:\s*(.*?)(?=Ticket Detail:|Location:|$)", 
             full_text, 
@@ -152,14 +171,12 @@ def extract_customer_contact(full_text: str) -> tuple[str, str]:
         target_text = contact_section_m.group(1).strip() if contact_section_m else ""
 
         if target_text:
-            # ค้นหาเบอร์โทรที่ไม่ใช่เบอร์ช่าง
             all_phones = re.findall(r"0[689]\d{8}", target_text)
             for ph in all_phones:
                 if ph not in TECH_PHONES:
                     phone_number = ph
                     break
 
-            # ค้นหาชื่อลูกค้า
             cleaned_text_for_name = re.sub(r"(?:คุณ\s*){2,}", "คุณ ", target_text)
             name_m = re.search(r"(?:คุณ|Khun)\s*([ก-๙a-zA-Z]{2,15})", cleaned_text_for_name)
             if name_m:
@@ -216,7 +233,7 @@ def parse_and_group_by_zone(
         full_text = f"{ticket_text} {circuit_text} {raw_json_str}"
 
         # -------------------------------------------------------------
-        # 0. ตรวจสอบตั๋วปิดงาน (เฉพาะ "ช่างแจ้งปิดงาน" หรือ "ขอปิดงาน")
+        # 0. ตรวจสอบตั๋วปิดงาน
         # -------------------------------------------------------------
         if re.search(r"ช่าง(?:พื้นที่)?\s*.*?\s*ขอปิดงาน|ช่างแจ้งปิดงาน", full_text):
             continue
@@ -236,9 +253,10 @@ def parse_and_group_by_zone(
             ticket_id = ticket_m.group(1) if ticket_m else "N/A"
 
         # -------------------------------------------------------------
-        # 2. ดึงข้อมูลวัน/เวลานัดหมาย
+        # 2. ดึงข้อมูลวัน/เวลานัดหมาย & Remark
         # -------------------------------------------------------------
         appt_data = extract_appointment_info(full_text)
+        remark_str = extract_hold_remark(full_text)  # 🎯 ดึง Remark เพิ่มเติม
 
         # -------------------------------------------------------------
         # 3. ดึง Circuit ID & ชื่อสถานที่
@@ -259,7 +277,7 @@ def parse_and_group_by_zone(
         circuit_disp = f"Circuit: {circuit_id} {location_address}".strip() if circuit_id else location_address
 
         # -------------------------------------------------------------
-        # 4. ดึง ชื่อผู้ติดต่อ & เบอร์โทรศัพท์ (ถ้าไม่มีทั้งคู่ ให้เป็นค่าว่าง)
+        # 4. ดึง ชื่อผู้ติดต่อ & เบอร์โทรศัพท์
         # -------------------------------------------------------------
         contact_name, phone_number = extract_customer_contact(full_text)
 
@@ -272,7 +290,7 @@ def parse_and_group_by_zone(
             contact_disp = f"ติดต่อ : {phone_number}"
 
         # -------------------------------------------------------------
-        # 5. เก็บข้อมูลเข้าparsed_tickets (จุดที่ขาดหายไป)
+        # 5. เก็บข้อมูลเข้า parsed_tickets
         # -------------------------------------------------------------
         parsed_tickets.append({
             "ticket_id": ticket_id,
@@ -280,6 +298,7 @@ def parse_and_group_by_zone(
             "contact_str": contact_disp,
             "appt_date": appt_data["date"],
             "appt_time": appt_data["time"],
+            "remark": remark_str,  # 🎯 บันทึก Remark
             "datetime_obj": appt_data["datetime_obj"]
         })
 
@@ -292,9 +311,11 @@ def parse_and_group_by_zone(
     parsed_tickets.sort(key=lambda x: x["datetime_obj"])
 
     # -------------------------------------------------------------
-    # 7. สร้าง Output แยกหมวดหมู่ (จัด Format หน้า LINE ให้โปรและอ่านง่าย)
+    # 7. สร้าง Output แยกหมวดหมู่
     # -------------------------------------------------------------
     today_tickets = [t for t in parsed_tickets if t["appt_date"] == today_formatted]
+    # 🎯 จุดที่ 2: ดึงเฉพาะงานค้างที่เป็นวันถัดไป (ตัดงานวันนี้ออก)
+    future_tickets = [t for t in parsed_tickets if t["appt_date"] != today_formatted]
 
     output_sections = []
 
@@ -308,7 +329,7 @@ def parse_and_group_by_zone(
             ]
             if t['contact_str']:
                 lines.append(t['contact_str'])
-            lines.append(f"นัดลูกค้า {t['appt_date']} เวลา {t['appt_time']}")
+            lines.append(f"นัดลูกค้า {t['appt_date']} เวลา {t['appt_time']}{t['remark']}")
             
             output_sections.append("\n".join(lines))
     else:
@@ -316,17 +337,20 @@ def parse_and_group_by_zone(
 
     output_sections.append("----------------------------------")
 
-    # ส่วนที่ 2: งานค้างทั้งหมด
-    output_sections.append("📋 [ งานค้างทั้งหมด (ตามวันนัด) ]")
-    for t in parsed_tickets:
-        lines = [
-            f"🎫 : {t['ticket_id']}",
-            f"{t['company_info']}"
-        ]
-        if t['contact_str']:
-            lines.append(t['contact_str'])
-        lines.append(f"นัดลูกค้า {t['appt_date']} เวลา {t['appt_time']}")
+    # ส่วนที่ 2: งานค้างทั้งหมด (วันถัดไป)
+    output_sections.append("📋 [ งานค้างทั้งหมด (วันถัดไป) ]")
+    if future_tickets:
+        for t in future_tickets:
+            lines = [
+                f"🎫 : {t['ticket_id']}",
+                f"{t['company_info']}"
+            ]
+            if t['contact_str']:
+                lines.append(t['contact_str'])
+            lines.append(f"นัดลูกค้า {t['appt_date']} เวลา {t['appt_time']}{t['remark']}")
 
-        output_sections.append("\n".join(lines))
+            output_sections.append("\n".join(lines))
+    else:
+        output_sections.append("ไม่มีรายการงานค้างวันถัดไป")
 
     return "\n\n".join(output_sections)
