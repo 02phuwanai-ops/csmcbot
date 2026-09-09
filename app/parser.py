@@ -244,7 +244,7 @@ def parse_and_group_by_zone(
         ticket_id = "N/A"
         selected_ticket_elem = soup_ticket.select_one("#select2-ticketID-container")
         if selected_ticket_elem:
-            ticket_m = re.search(r"(TT\d{10,14})", selected_ticket_elem.get_text())
+            ticket_m = re.search(r"((?:TT|INC)\d{8,14})", selected_ticket_elem.get_text())
             if ticket_m:
                 ticket_id = ticket_m.group(1)
 

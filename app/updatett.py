@@ -20,7 +20,7 @@ class UpdateTTClient:
             "Pollawat",
         ]
 
-        # 2. รายชื่อ 6 เขต/แขวงที่อนุญาต (รวมแขวงย่อยและคำที่พบในระบบ)
+        # 2. รายชื่อ 6 เขต/แขวงที่อนุญาต
         self.allowed_districts = [
             # 1. บางจาก / พระโขนง
             "บางจาก", "พระโขนง",
@@ -36,7 +36,7 @@ class UpdateTTClient:
             "พลับพลา", "วังทองหลาง",
         ]
 
-        # 🚫 เพิ่ม Blacklist เขตที่ไม่ต้องการให้ดึง (ป้องกันกรณีชื่อสาขามีคำว่า ห้วยขวาง แต่เป็นเขตอื่น)
+        # 🚫 Blacklist เขตที่ไม่ต้องการดึง (เช่น ดินแดง)
         self.excluded_districts = [
             "ดินแดง",
         ]
@@ -122,11 +122,11 @@ class UpdateTTClient:
 
         subject_lower = subject.lower()
 
-        # 🎯 1. เงื่อนไขใหม่: ถ้าเป็นตั๋ว INC ให้ผ่านเข้ามาประมวลผลก่อนเสมอ
+        # 🎯 1. ถ้าเป็นตั๋ว INC ให้ผ่านเข้ามาประมวลผลก่อนเสมอ (เพราะหัวตั๋วไม่มีชื่อช่าง)
         if "inc" in subject_lower:
             return True
 
-        # 2. เช็กว่าตรงกับชื่อช่างในทีมหรือไม่ (สำหรับตั๋ว TT เดิม)
+        # 2. เช็กชื่อช่างในทีม (สำหรับตั๋ว TT เดิม)
         for target in self.target_technicians:
             if target.lower() in subject_lower:
                 return True
@@ -147,18 +147,16 @@ class UpdateTTClient:
         
         target_zone = "2" if zone == "WW BMA East" or not zone else str(zone)
 
+        # 🎯 ทดลองยิงดึงหลายๆ Work Type เพื่อให้ครอบคลุมทั้ง TT และ INC
         payloads_to_try = [
-            {
-                "zone": target_zone,
-                "workType": worktype,
-                "includeClosedWithin24Hours": "No"
-            },
-            {
-                "zone": target_zone,
-                "workType": worktype,
-                "includeClosedWithin24Hours": "Yes"
-            }
+            {"zone": target_zone, "workType": worktype, "includeClosedWithin24Hours": "No"},
+            {"zone": target_zone, "workType": "Incident", "includeClosedWithin24Hours": "No"},
+            {"zone": target_zone, "workType": "", "includeClosedWithin24Hours": "No"},
+            {"zone": target_zone, "workType": worktype, "includeClosedWithin24Hours": "Yes"},
         ]
+
+        all_collected_tickets = []
+        seen_ticket_ids = set()
 
         for payload in payloads_to_try:
             try:
@@ -170,26 +168,30 @@ class UpdateTTClient:
                         continue
 
                     raw_ticket_list = data.get("ticket_list", {}) if isinstance(data, dict) else data
-                    tickets = []
 
                     if isinstance(raw_ticket_list, dict):
                         for t_id, t_info in raw_ticket_list.items():
-                            if isinstance(t_info, dict):
-                                t_info["ticketID"] = t_id
-                                tickets.append(t_info)
-                            else:
-                                tickets.append({"ticketID": t_id, "SUBJECT": str(t_info)})
+                            if t_id not in seen_ticket_ids:
+                                seen_ticket_ids.add(t_id)
+                                if isinstance(t_info, dict):
+                                    t_info["ticketID"] = t_id
+                                    all_collected_tickets.append(t_info)
+                                else:
+                                    all_collected_tickets.append({"ticketID": t_id, "SUBJECT": str(t_info)})
                     elif isinstance(raw_ticket_list, list):
-                        tickets = raw_ticket_list
-                    
-                    if tickets:
-                        print(f"✅ ดึงตั๋วสำเร็จ! เจอทั้งหมด {len(tickets)} ใบ")
-                        return tickets
+                        for t_item in raw_ticket_list:
+                            t_id = self.extract_ticket_id(t_item)
+                            if t_id and t_id not in seen_ticket_ids:
+                                seen_ticket_ids.add(t_id)
+                                all_collected_tickets.append(t_item)
 
             except Exception as e:
                 print(f"❌ Error fetching ticket list: {e}")
 
-        # 🎯 เพิ่มระบบ Auto Re-login: หากดึงแล้วได้ 0 รายการ และยังไม่ได้ลอง retry
+        if all_collected_tickets:
+            print(f"✅ ดึงตั๋วสำเร็จ! เจอทั้งหมด {len(all_collected_tickets)} ใบ (รวม TT และ INC)")
+            return all_collected_tickets
+
         if retry:
             print("🔄 ไม่พบตั๋วในรอบแรก กำลังลอง Re-login ขอ Cookie ใหม่และยิงซ้ำอัตโนมัติ...")
             self.ensure_authenticated_session(force_refresh=True)
@@ -208,14 +210,13 @@ class UpdateTTClient:
             if self.is_target_technician(item):
                 filtered_tickets.append(item)
 
-        print(f"🎯 จากทั้งหมด {len(all_tickets)} รายการ -> คัดเหลือเฉพาะช่างในทีม {len(filtered_tickets)} รายการ")
+        print(f"🎯 จากทั้งหมด {len(all_tickets)} รายการ -> คัดเหลือเฉพาะช่างในทีมและตั๋ว INC {len(filtered_tickets)} รายการ")
         return filtered_tickets
 
     def get_ticket_activity_log(self, ticket_id: str, zone: str = "2", activity_id: str = "") -> str:
         self.ensure_authenticated_session()
         url = f"{self.base_url}/get_activity_detail"
         
-        # 🎯 เพิ่ม activity ใน Payload เพื่อให้ระบบคืนข้อความ Log ออกมาครบถ้วน
         payload = {
             "ticketID": ticket_id,
             "zone": "2" if zone == "WW BMA East" or not zone else str(zone),
@@ -242,57 +243,62 @@ class UpdateTTClient:
         target_zone = "2" if zone == "WW BMA East" or not zone else str(zone)
 
         url = f"{self.base_url}/get_ticketDeatil"
-        payload = {
-            "ticketID": ticket_id,
-            "zone": target_zone,
-            "worktype": worktype,
-        }
 
-        try:
-            res = self.session.post(
-                url, data=payload, headers=self.headers, timeout=30
-            )
+        # 🎯 ลองยิงทั้ง Corporate Service และ Incident
+        worktypes_to_try = [worktype, "Incident", ""] if "INC" in ticket_id.upper() else [worktype]
 
-            if res.status_code == 200:
-                data = res.json()
-                if not data or not isinstance(data, (dict, list)):
-                    return {}
-                
-                address_info = str(data)
-                if not any(dist in address_info for dist in self.allowed_districts):
-                    return {}
+        for wt in worktypes_to_try:
+            payload = {
+                "ticketID": ticket_id,
+                "zone": target_zone,
+                "worktype": wt,
+            }
 
-                # 🎯 2. เช็กว่าอยู่ในเขตที่อนุญาตหรือไม่
-                if not any(dist in address_info for dist in self.allowed_districts):
-                    return {}
+            try:
+                res = self.session.post(
+                    url, data=payload, headers=self.headers, timeout=30
+                )
 
-                result_dict = data if isinstance(data, dict) else {"data": data}
+                if res.status_code == 200:
+                    data = res.json()
+                    if not data or not isinstance(data, (dict, list)):
+                        continue
 
-                # 1. ดึง Activity Log
-                activity_log_text = self.get_ticket_activity_log(ticket_id, zone=target_zone)
-                
-                # 2. แกะเวลา HOLD SLA จาก Log
-                hold_info = self.parse_hold_sla(activity_log_text, raw_data=result_dict)
-                result_dict["hold_info"] = hold_info
+                    address_info = str(data)
 
-                # 3. Override ฟิลด์เวลาทั้งหมดเพื่อความแน่นอนในการส่งข้อความ
-                if hold_info.get("reschedule_time"):
-                    real_time = hold_info["reschedule_time"]
-                    result_dict["ExpectDate"] = real_time
-                    result_dict["appointmentDate"] = real_time
-                    result_dict["appointment_date"] = real_time
-                    result_dict["appointDate"] = real_time
-                    result_dict["appoint_date"] = real_time
+                    # 🎯 1. เช็ก Blacklist เขตห้าม (เช่น ดินแดง)
+                    if any(ex_dist in address_info for ex_dist in self.excluded_districts):
+                        return {}
 
-                return result_dict
-            elif res.status_code == 404 and retry:
-                self.ensure_authenticated_session(force_refresh=True)
-                return self.get_ticket_detail(ticket_item, zone=zone, worktype=worktype, retry=False)
-            else:
-                return {}
-        except Exception as e:
-            print(f"Error fetching detail for Ticket: {e}")
-            return {}
+                    # 🎯 2. เช็กเขตที่อนุญาต (ถ้าเป็นตั๋ว INC และดึงผ่านแล้วให้ผ่านเข้ามาประมวลผล)
+                    if "INC" not in ticket_id.upper():
+                        if not any(dist in address_info for dist in self.allowed_districts):
+                            return {}
+
+                    result_dict = data if isinstance(data, dict) else {"data": data}
+
+                    # ดึง Activity Log
+                    activity_log_text = self.get_ticket_activity_log(ticket_id, zone=target_zone)
+                    hold_info = self.parse_hold_sla(activity_log_text, raw_data=result_dict)
+                    result_dict["hold_info"] = hold_info
+
+                    if hold_info.get("reschedule_time"):
+                        real_time = hold_info["reschedule_time"]
+                        result_dict["ExpectDate"] = real_time
+                        result_dict["appointmentDate"] = real_time
+                        result_dict["appointment_date"] = real_time
+                        result_dict["appointDate"] = real_time
+                        result_dict["appoint_date"] = real_time
+
+                    return result_dict
+            except Exception as e:
+                print(f"Error fetching detail for Ticket {ticket_id}: {e}")
+
+        if retry:
+            self.ensure_authenticated_session(force_refresh=True)
+            return self.get_ticket_detail(ticket_item, zone=zone, worktype=worktype, retry=False)
+
+        return {}
 
     def extract_customer_phone(self, raw_data: dict) -> str:
         if not raw_data:
@@ -313,14 +319,12 @@ class UpdateTTClient:
         if not log_text:
             return result
 
-        # ล้าง HTML Tags และจัดรูปแบบข้อความ
         clean_text = re.sub(r'<[^>]+>', ' ', log_text)
         clean_text = re.sub(r'\s+', ' ', clean_text)
 
         if "HOLD" in clean_text.upper():
             result["is_hold"] = True
 
-        # 🎯 Regex เจาะจงแพทเทิร์น: HOLD SLA (... to DD/MM/YY HH:MM)
         pattern = r'HOLD\s+SLA\s*\([^)]*?\bto\s+(\d{1,2}/\d{1,2}/\d{2,4}\s+\d{1,2}:\d{2})\)'
         match = re.search(pattern, clean_text, re.IGNORECASE)
 
@@ -338,7 +342,6 @@ class UpdateTTClient:
             else:
                 result["reschedule_time"] = raw_dt
 
-        # 🎯 ดึงสาเหตุที่ HOLD
         reason_match = re.search(r'เนื่องจาก\s*([^\s<]+(?:\s+[^\s<]+)*)', clean_text)
         if reason_match:
             result["reason"] = reason_match.group(0).strip()
