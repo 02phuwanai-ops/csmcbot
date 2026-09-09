@@ -58,6 +58,27 @@ def extract_hold_remark(full_text: str) -> str:
 def extract_appointment_info(full_text: str) -> dict:
     """ดึงวันที่และเวลานัดหมายจาก Log / HOLD SLA"""
     
+    current_year = datetime.now().year  # 2026
+
+    def fix_year(year_str: str) -> str:
+        """ช่วยปรับปี ค.ศ. ให้ถูกต้อง หากพบปีเพี้ยน เช่น 09 -> 2026"""
+        if len(year_str) == 2:
+            y_int = int(year_str)
+            # ถ้าเป็นปี 24-29 ให้ตีเป็น ค.ศ. 2024-2029
+            if 20 <= y_int <= 30:
+                return f"20{year_str}"
+            # ถ้าเป็นปี พ.ศ. เช่น 69 ให้ลบ 543
+            elif y_int > 50:
+                return str(2000 + y_int - 43)
+            else:
+                return str(current_year)
+        elif len(year_str) == 4:
+            y_int = int(year_str)
+            if y_int < 2020:  # กรณีแกะได้ปี ค.ศ. ต่ำกว่า 2020 เช่น 2009
+                return str(current_year)
+            return year_str
+        return str(current_year)
+
     # 1. ค้นหา Pattern 'to DD/MM/YY HH:MM' หรือ 'to DD/MM/YYYY HH:MM'
     hold_matches = re.findall(
         r"(?:to|-|ถึง)\s*(\d{1,2}[/\.-]\d{1,2}[/\.-]\d{2,4})\s*(\d{1,2}[:\.]\d{2})", full_text, re.IGNORECASE
@@ -66,7 +87,7 @@ def extract_appointment_info(full_text: str) -> dict:
         last_date, last_time = hold_matches[-1]
         h_parts = re.split(r"[/\.-]", last_date)
         if len(h_parts) == 3:
-            h_year = f"20{h_parts[2]}" if len(h_parts[2]) == 2 else h_parts[2]
+            h_year = fix_year(h_parts[2])
             time_clean = last_time.replace(".", ":")
             dt_obj = None
             try:
@@ -88,7 +109,7 @@ def extract_appointment_info(full_text: str) -> dict:
         t_date, t_time = thai_date_match.group(1), thai_date_match.group(2)
         h_parts = re.split(r"[/\.-]", t_date)
         if len(h_parts) == 3:
-            h_year = f"20{h_parts[2]}" if len(h_parts[2]) == 2 else h_parts[2]
+            h_year = fix_year(h_parts[2])
             time_clean = t_time.replace(".", ":")
             dt_obj = None
             try:
@@ -102,7 +123,7 @@ def extract_appointment_info(full_text: str) -> dict:
                 "datetime_obj": dt_obj or datetime.max
             }
 
-    # 3. ค้นหา General Match (ลบส่วนเวลาสร้างตั๋ว/เปิดตั๋วอัตโนมัติออก ป้องกันการคว้าเวลาสร้างตั๋วมั่ว)
+    # 3. ค้นหา General Match (ลบส่วนเวลาสร้างตั๋ว/เปิดตั๋วอัตโนมัติออก)
     text_cleaned_log = re.sub(
         r"(?:ExpectedDate|Created|OpenDate|Time)\s*:\s*\d{1,2}[/\.-]\d{1,2}[/\.-]\d{2,4}\s+\d{1,2}[:\.]\d{2}",
         "",
@@ -117,7 +138,7 @@ def extract_appointment_info(full_text: str) -> dict:
         g_date, g_time = general_match.group(1), general_match.group(2)
         h_parts = re.split(r"[/\.-]", g_date)
         if len(h_parts) == 3:
-            h_year = f"20{h_parts[2]}" if len(h_parts[2]) == 2 else h_parts[2]
+            h_year = fix_year(h_parts[2])
             time_clean = g_time.replace(".", ":")
             dt_obj = None
             try:

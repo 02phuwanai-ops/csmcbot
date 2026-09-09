@@ -92,49 +92,43 @@ class UpdateTTClient:
             return item.strip()
         if isinstance(item, dict):
             val = (
-                item.get("SUBJECT")
+                item.get("ticketID")
+                or item.get("ticketNo")
+                or item.get("SUBJECT")
                 or item.get("text")
                 or item.get("val")
                 or item.get("label")
                 or item.get("value")
-                or item.get("ticketID")
-                or item.get("ticketNo")
-                or ""
+                or str(item)
             )
             return str(val).strip()
         return str(item).strip()
 
     def extract_ticket_id(self, item) -> str:
-        if isinstance(item, dict) and item.get("ticketID"):
-            return str(item.get("ticketID")).strip()
-            
+        """🎯 ปรับแก้ให้รองรับทั้ง TT และ INC จากทุก Field"""
         text = self.get_full_ticket_text(item)
-        match = re.search(r'((?:TT|INC)\d+)', text)
+        match = re.search(r'((?:TT|INC)\d+)', text, re.IGNORECASE)
         if match:
-            return match.group(1)
+            return match.group(1).upper()
         return text.split()[0] if text else ""
 
     def is_target_technician(self, ticket_input) -> bool:
-        if isinstance(ticket_input, dict):
-            subject = ticket_input.get("SUBJECT", str(ticket_input))
-        else:
-            subject = str(ticket_input)
+        """🎯 ปรับให้ตรวจสอบ INC แบบ Case-Insensitive ได้สมบูรณ์"""
+        raw_str = str(ticket_input).upper()
 
-        subject_lower = subject.lower()
-
-        # 🎯 1. ถ้าเป็นตั๋ว INC ให้ผ่านเข้ามาประมวลผลก่อนเสมอ (เพราะหัวตั๋วไม่มีชื่อช่าง)
-        if "inc" in subject_lower:
+        # 🎯 1. ถ้าเป็นตั๋ว INC ให้ผ่านเข้ามาประมวลผลทันที
+        if "INC" in raw_str:
             return True
 
         # 2. เช็กชื่อช่างในทีม (สำหรับตั๋ว TT เดิม)
         for target in self.target_technicians:
-            if target.lower() in subject_lower:
+            if target.upper() in raw_str:
                 return True
 
         # 3. ป้องกันตั๋ว HOLD SLA / BMAE4 หลุด
-        keywords_bypass = ["hold", "slahold", "ww-bmae4-corp", "bmae4"]
+        keywords_bypass = ["HOLD", "SLAHOLD", "WW-BMAE4-CORP", "BMAE4"]
         for kw in keywords_bypass:
-            if kw in subject_lower:
+            if kw in raw_str:
                 return True
 
         return False
@@ -147,7 +141,7 @@ class UpdateTTClient:
         
         target_zone = "2" if zone == "WW BMA East" or not zone else str(zone)
 
-        # 🎯 ทดลองยิงดึงหลายๆ Work Type เพื่อให้ครอบคลุมทั้ง TT และ INC
+        # 🎯 ดึงตั๋วแบบครอบคลุมทั้ง Corporate Service, Incident และค่าว่าง
         payloads_to_try = [
             {"zone": target_zone, "workType": worktype, "includeClosedWithin24Hours": "No"},
             {"zone": target_zone, "workType": "Incident", "includeClosedWithin24Hours": "No"},
@@ -171,13 +165,14 @@ class UpdateTTClient:
 
                     if isinstance(raw_ticket_list, dict):
                         for t_id, t_info in raw_ticket_list.items():
-                            if t_id not in seen_ticket_ids:
-                                seen_ticket_ids.add(t_id)
+                            extracted_id = self.extract_ticket_id(t_id) or self.extract_ticket_id(t_info)
+                            if extracted_id and extracted_id not in seen_ticket_ids:
+                                seen_ticket_ids.add(extracted_id)
                                 if isinstance(t_info, dict):
-                                    t_info["ticketID"] = t_id
+                                    t_info["ticketID"] = extracted_id
                                     all_collected_tickets.append(t_info)
                                 else:
-                                    all_collected_tickets.append({"ticketID": t_id, "SUBJECT": str(t_info)})
+                                    all_collected_tickets.append({"ticketID": extracted_id, "SUBJECT": str(t_info)})
                     elif isinstance(raw_ticket_list, list):
                         for t_item in raw_ticket_list:
                             t_id = self.extract_ticket_id(t_item)
@@ -244,8 +239,8 @@ class UpdateTTClient:
 
         url = f"{self.base_url}/get_ticketDeatil"
 
-        # 🎯 ยิงทดลองทั้ง Corporate Service, Incident และค่าว่าง
-        worktypes_to_try = [worktype, "Incident", ""] if "INC" in ticket_id.upper() else [worktype]
+        # 🎯 ตั๋ว INC จะพยายามดึงหลายๆ WorkType เพื่อป้องกันไม่ให้ข้อมูลหลุด
+        worktypes_to_try = [worktype, "Incident", ""] if "INC" in ticket_id.upper() else [worktype, ""]
 
         for wt in worktypes_to_try:
             payload = {
