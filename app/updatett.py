@@ -244,7 +244,7 @@ class UpdateTTClient:
 
         url = f"{self.base_url}/get_ticketDeatil"
 
-        # 🎯 ลองยิงทั้ง Corporate Service และ Incident
+        # 🎯 ยิงทดลองทั้ง Corporate Service, Incident และค่าว่าง
         worktypes_to_try = [worktype, "Incident", ""] if "INC" in ticket_id.upper() else [worktype]
 
         for wt in worktypes_to_try:
@@ -260,24 +260,30 @@ class UpdateTTClient:
                 )
 
                 if res.status_code == 200:
-                    data = res.json()
-                    if not data or not isinstance(data, (dict, list)):
+                    try:
+                        data = res.json()
+                    except Exception:
+                        continue
+
+                    if not data:
                         continue
 
                     address_info = str(data)
 
-                    # 🎯 1. เช็ก Blacklist เขตห้าม (เช่น ดินแดง)
+                    # 🚫 1. เช็ก Blacklist เขตห้าม (ดินแดง)
                     if any(ex_dist in address_info for ex_dist in self.excluded_districts):
+                        print(f"⛔ ตั๋ว {ticket_id} ติด Blacklist ดินแดง -> ข้าม")
                         return {}
 
-                    # 🎯 2. เช็กเขตที่อนุญาต (ถ้าเป็นตั๋ว INC และดึงผ่านแล้วให้ผ่านเข้ามาประมวลผล)
-                    if "INC" not in ticket_id.upper():
+                    # 🎯 2. กรองเขต: สำหรับตั๋ว TT ให้เช็กเขตที่อนุญาต / สำหรับตั๋ว INC ให้ปล่อยผ่านได้เลยถ้าไม่ติด Blacklist
+                    is_inc = "INC" in ticket_id.upper()
+                    if not is_inc:
                         if not any(dist in address_info for dist in self.allowed_districts):
                             return {}
 
                     result_dict = data if isinstance(data, dict) else {"data": data}
 
-                    # ดึง Activity Log
+                    # ดึง Activity Log และเวลา HOLD SLA
                     activity_log_text = self.get_ticket_activity_log(ticket_id, zone=target_zone)
                     hold_info = self.parse_hold_sla(activity_log_text, raw_data=result_dict)
                     result_dict["hold_info"] = hold_info
