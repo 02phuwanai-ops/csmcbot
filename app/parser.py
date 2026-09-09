@@ -1,4 +1,3 @@
-# app/parser.py
 import re
 from datetime import datetime
 from bs4 import BeautifulSoup
@@ -233,13 +232,13 @@ def parse_and_group_by_zone(
         full_text = f"{ticket_text} {circuit_text} {raw_json_str}"
 
         # -------------------------------------------------------------
-        # 0. ตรวจสอบตั๋วปิดงาน
+        # 0. ตรวจสอบตั๋วปิดงาน (ปรับให้แม่นยำ ไม่ให้กระทบตั๋ว INC ที่กำลังดำเนินการ)
         # -------------------------------------------------------------
-        if re.search(r"ช่าง(?:พื้นที่)?\s*.*?\s*ขอปิดงาน|ช่างแจ้งปิดงาน", full_text):
+        if re.search(r"สถานะ\s*:\s*Closed|ช่างแจ้งปิดงานเรียบร้อย", full_text, re.IGNORECASE):
             continue
 
         # -------------------------------------------------------------
-        # 1. ดึง Ticket ID
+        # 1. ดึง Ticket ID (รองรับทั้ง TT และ INC)
         # -------------------------------------------------------------
         ticket_id = "N/A"
         selected_ticket_elem = soup_ticket.select_one("#select2-ticketID-container")
@@ -249,7 +248,7 @@ def parse_and_group_by_zone(
                 ticket_id = ticket_m.group(1)
 
         if ticket_id == "N/A":
-            ticket_m = re.search(r"(TT\d{10,14})", full_text)
+            ticket_m = re.search(r"((?:TT|INC)\d{8,14})", full_text)
             ticket_id = ticket_m.group(1) if ticket_m else "N/A"
 
         # -------------------------------------------------------------
