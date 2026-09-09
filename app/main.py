@@ -76,22 +76,36 @@ def generate_daily_report(selected_zones=None, selected_employees=None, work_dat
     return line_message_text
 
 
-def process_and_send_push(target_id: str):
-    """ส่งผลลัพธ์ผ่าน Push Message รองรับทั้ง User ID และ Group ID"""
+def process_and_send_reply(reply_token: str, target_id: str):
+    """
+    ดึงข้อมูลและส่งรายงานผ่าน Reply Message (ฟรี ไม่เสียโควตา)
+    หาก reply_token หมดอายุ จะ Fallback ไปใช้ Push Message สำรอง
+    """
     try:
         report_text = generate_daily_report()
         if not report_text:
             report_text = "ℹ️ ไม่พบบันทึกงานนัดหมายของช่างในทีมสำหรับวันนี้ครับ"
 
-        line_bot_api.push_message(target_id, TextSendMessage(text=report_text))
+        # ใช้ reply_message ฟรี ไม่เสียโควตาข้อความ
+        line_bot_api.reply_message(reply_token, TextSendMessage(text=report_text))
+
     except LineBotApiError as e:
-        logger.error(f"LINE Push Error ({e.status_code}): {e.error.message}")
+        # หากตอบกลับช้าเกินไปจน reply_token หมดอายุ (Invalid reply token) ให้ใช้ Push Message แทน
+        if e.status_code == 400:
+            logger.warning("Reply token Expired. Fallback to Push Message...")
+            try:
+                line_bot_api.push_message(target_id, TextSendMessage(text=report_text))
+            except Exception as push_err:
+                logger.error(f"Fallback Push Error: {push_err}")
+        else:
+            logger.error(f"LINE Reply Error ({e.status_code}): {e.error.message}")
+
     except Exception as e:
-        logger.error(f"Error sending push message: {e}")
+        logger.error(f"Error processing report: {e}")
         try:
-            line_bot_api.push_message(
-                target_id,
-                TextSendMessage(text=f"❌ เกิดข้อผิดพลาดในการดึงข้อมูล: {e}"),
+            line_bot_api.reply_message(
+                reply_token,
+                TextSendMessage(text=f"❌ เกิดข้อผิดพลาดในการดึงข้อมูล: {e}")
             )
         except Exception:
             pass
@@ -120,13 +134,8 @@ async def callback(request: Request, background_tasks: BackgroundTasks):
 
                 # คีย์เวิร์ดสำหรับดึงรายงาน
                 if msg_text in ["ดึงงานวันนี้", "งานวันนี้", "job", "Job", "สรุป", "สรุปวันนี้", "งาน", "งานค้าง", "report"]:
-                    line_bot_api.reply_message(
-                        event.reply_token,
-                        TextSendMessage(
-                            text="⏳ รับคำสั่งเรียบร้อยแล้ว กำลังดึงข้อมูลงานนัดวันนี้ สักครู่นะครับ..."
-                        ),
-                    )
-                    background_tasks.add_task(process_and_send_push, target_id)
+                    # รันการดึงรายงานเป็น Background Task แล้วตอบกลับด้วย reply_token
+                    background_tasks.add_task(process_and_send_reply, event.reply_token, target_id)
 
                 elif msg_text in ["สวัสดี", "เมนู", "help"]:
                     line_bot_api.reply_message(
