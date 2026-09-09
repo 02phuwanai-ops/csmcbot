@@ -36,6 +36,11 @@ class UpdateTTClient:
             "พลับพลา", "วังทองหลาง",
         ]
 
+        # 🚫 เพิ่ม Blacklist เขตที่ไม่ต้องการให้ดึง (ป้องกันกรณีชื่อสาขามีคำว่า ห้วยขวาง แต่เป็นเขตอื่น)
+        self.excluded_districts = [
+            "ดินแดง",
+        ]
+
         # 3. Blacklist เบอร์โทรช่าง
         self.tech_phones = [
             "0820054606", "0970642598", "0820054570", "0834903149",
@@ -104,7 +109,7 @@ class UpdateTTClient:
             return str(item.get("ticketID")).strip()
             
         text = self.get_full_ticket_text(item)
-        match = re.search(r'(TT\d+)', text)
+        match = re.search(r'((?:TT|INC)\d+)', text)
         if match:
             return match.group(1)
         return text.split()[0] if text else ""
@@ -250,6 +255,10 @@ class UpdateTTClient:
                     return {}
                 
                 address_info = str(data)
+                if not any(dist in address_info for dist in self.allowed_districts):
+                    return {}
+
+                # 🎯 2. เช็กว่าอยู่ในเขตที่อนุญาตหรือไม่
                 if not any(dist in address_info for dist in self.allowed_districts):
                     return {}
 
