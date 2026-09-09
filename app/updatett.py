@@ -122,12 +122,16 @@ class UpdateTTClient:
 
         subject_lower = subject.lower()
 
-        # 1. เช็กว่าตรงกับชื่อช่างในทีมหรือไม่
+        # 🎯 1. เงื่อนไขใหม่: ถ้าเป็นตั๋ว INC ให้ผ่านเข้ามาประมวลผลก่อนเสมอ
+        if "inc" in subject_lower:
+            return True
+
+        # 2. เช็กว่าตรงกับชื่อช่างในทีมหรือไม่ (สำหรับตั๋ว TT เดิม)
         for target in self.target_technicians:
             if target.lower() in subject_lower:
                 return True
 
-        # 2. ป้องกันตั๋ว HOLD SLA / BMAE4 หลุด (กรณีตั๋วถูกเปลี่ยน Owner ในระบบ)
+        # 3. ป้องกันตั๋ว HOLD SLA / BMAE4 หลุด
         keywords_bypass = ["hold", "slahold", "ww-bmae4-corp", "bmae4"]
         for kw in keywords_bypass:
             if kw in subject_lower:
