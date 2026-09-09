@@ -1,3 +1,4 @@
+# app/parser.py
 import re
 from datetime import datetime
 from bs4 import BeautifulSoup
@@ -101,16 +102,16 @@ def extract_appointment_info(full_text: str) -> dict:
                 "datetime_obj": dt_obj or datetime.max
             }
 
-    # 3. ค้นหา General Match
-    text_without_expected = re.sub(
-        r"ExpectedDate\s*:\s*\d{1,2}[/\.-]\d{1,2}[/\.-]\d{2,4}\s+\d{1,2}[:\.]\d{2}",
+    # 3. ค้นหา General Match (ลบส่วนเวลาสร้างตั๋ว/เปิดตั๋วอัตโนมัติออก ป้องกันการคว้าเวลาสร้างตั๋วมั่ว)
+    text_cleaned_log = re.sub(
+        r"(?:ExpectedDate|Created|OpenDate|Time)\s*:\s*\d{1,2}[/\.-]\d{1,2}[/\.-]\d{2,4}\s+\d{1,2}[:\.]\d{2}",
         "",
         full_text,
         flags=re.IGNORECASE
     )
 
     general_match = re.search(
-        r"(\d{1,2}[/\.-]\d{1,2}[/\.-]\d{2,4})\s+(\d{1,2}[\.:]\d{2})", text_without_expected
+        r"(\d{1,2}[/\.-]\d{1,2}[/\.-]\d{2,4})\s+(\d{1,2}[\.:]\d{2})", text_cleaned_log
     )
     if general_match:
         g_date, g_time = general_match.group(1), general_match.group(2)
@@ -232,13 +233,13 @@ def parse_and_group_by_zone(
         full_text = f"{ticket_text} {circuit_text} {raw_json_str}"
 
         # -------------------------------------------------------------
-        # 0. ตรวจสอบตั๋วปิดงาน (ปรับให้แม่นยำ ไม่ให้กระทบตั๋ว INC ที่กำลังดำเนินการ)
+        # 0. ตรวจสอบตั๋วปิดงาน
         # -------------------------------------------------------------
-        if re.search(r"สถานะ\s*:\s*Closed|ช่างแจ้งปิดงานเรียบร้อย", full_text, re.IGNORECASE):
+        if re.search(r"ช่าง(?:พื้นที่)?\s*.*?\s*ขอปิดงาน|ช่างแจ้งปิดงาน", full_text):
             continue
 
         # -------------------------------------------------------------
-        # 1. ดึง Ticket ID (รองรับทั้ง TT และ INC)
+        # 1. ดึง Ticket ID (เพิ่มรองรับ INC เข้าไป)
         # -------------------------------------------------------------
         ticket_id = "N/A"
         selected_ticket_elem = soup_ticket.select_one("#select2-ticketID-container")
