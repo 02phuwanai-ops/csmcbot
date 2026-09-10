@@ -1,4 +1,3 @@
-# app/parser.py
 import re
 from datetime import datetime
 from bs4 import BeautifulSoup
@@ -11,6 +10,7 @@ ALIASES = {
     "K.Phuwanai Sopradit": ["Phuwanai Sopradit", "Phuwanai", "Sopradit"],
 }
 
+# 🎯 กำหนดเฉพาะเขตพื้นที่รับผิดชอบหลักของทีม
 MAIN_ZONES = [
     "พระโขนง",
     "คลองเตย",
@@ -33,21 +33,17 @@ def clean_text(text: str) -> str:
 
 
 def extract_hold_remark(full_text: str) -> str:
-    """🎯 จุดที่ 1: แกะ Remark หรือเหตุผลการ HOLD SLA ต่อท้ายนัดหมาย"""
-    # 1. หาคำว่า เนื่องจาก ...
+    """แกะ Remark หรือเหตุผลการ HOLD SLA ต่อท้ายนัดหมาย"""
     reason_match = re.search(r"เนื่องจาก\s*([^\s<]+(?:\s+[^\s<]+)*)", full_text)
     if reason_match:
         reason = reason_match.group(1).strip()
-        # ลบคำขยะหรือข้อความที่ยาวเกินไป
         reason = re.split(r"Ticket|Location|SMC|TK:|Splitter", reason, flags=re.IGNORECASE)[0].strip()
         if reason and len(reason) < 60:
             return f" ({reason})"
 
-    # 2. หา Pattern สาเหตุสั้นๆ ใน HOLD SLA
     hold_m = re.search(r"HOLD\s+SLA[^(]*\(([^)]+)\)", full_text, re.IGNORECASE)
     if hold_m:
         content = hold_m.group(1).strip()
-        # ถ้ามีคำว่า due to หรือ เนื่องจาก ในวงเล็บ
         if "due to" in content.lower():
             sub_reason = content.lower().split("due to")[-1].strip()
             return f" ({sub_reason})"
@@ -56,73 +52,70 @@ def extract_hold_remark(full_text: str) -> str:
 
 
 def extract_appointment_info(full_text: str) -> dict:
-    """ดึงวันที่และเวลานัดหมายจาก Log (โค้ดโครงสร้างเดิม เพิ่มแก้ปีเพี้ยน)"""
-    
-    current_year = datetime.now().year  # 2026
+    """ดึงวันที่และเวลานัดหมาย แก้อาการ MM/DD/YYYY เพี้ยน"""
+    current_year = datetime.now().year
+    today_str = datetime.now().strftime("%d/%m/%Y")
 
-    def fix_year(year_str: str) -> str:
-        """ช่วยปรับปี ค.ศ. ให้ถูกต้อง หากพบปีเพี้ยน เช่น 09 -> 2026"""
-        if len(year_str) == 2:
-            y_int = int(year_str)
-            if 20 <= y_int <= 30:
-                return f"20{year_str}"
-            elif y_int > 50:
-                return str(2000 + y_int - 43)
-            else:
-                return str(current_year)
-        elif len(year_str) == 4:
-            y_int = int(year_str)
-            if y_int < 2020:
-                return str(current_year)
-            return year_str
-        return str(current_year)
+    def parse_clean_date(d_str: str, t_str: str):
+        parts = re.split(r"[/\.-]", d_str)
+        if len(parts) != 3:
+            return None, None, None
 
-    # Pattern ดั้งเดิมสำหรับ Hold SLA
+        p1, p2, p3 = int(parts[0]), int(parts[1]), parts[2]
+        
+        year = str(current_year)
+        if len(p3) == 2:
+            year = f"20{p3}" if 20 <= int(p3) <= 30 else str(current_year)
+        elif len(p3) == 4:
+            year = p3
+
+        # ดักจับ MM/DD/YYYY (เช่น 09/26/2026 -> 26/09/2026)
+        if p1 <= 12 and p2 > 12:
+            day, month = p2, p1
+        else:
+            day, month = p1, p2
+
+        time_clean = t_str.replace(".", ":")
+        date_formatted = f"{day:02d}/{month:02d}/{year}"
+        
+        dt_obj = None
+        try:
+            dt_obj = datetime.strptime(f"{date_formatted} {time_clean}", "%d/%m/%Y %H:%M")
+        except ValueError:
+            dt_obj = datetime.max
+
+        return date_formatted, f"{time_clean} น.", dt_obj
+
+    # 1. Pattern Hold SLA
     hold_matches = re.findall(
         r"to\s+(\d{1,2}[/\.-]\d{1,2}[/\.-]\d{2,4})\s+(\d{1,2}[:\.]\d{2})",
         full_text, re.IGNORECASE
     )
     if hold_matches:
         last_date, last_time = hold_matches[-1]
-        h_parts = re.split(r"[/\.-]", last_date)
-        if len(h_parts) == 3:
-            h_year = fix_year(h_parts[2])
-            time_clean = last_time.replace(".", ":")
-            dt_obj = None
-            try:
-                dt_obj = datetime.strptime(f"{h_parts[0].zfill(2)}/{h_parts[1].zfill(2)}/{h_year} {time_clean}", "%d/%m/%Y %H:%M")
-            except ValueError:
-                pass
+        d_fmt, t_fmt, dt_obj = parse_clean_date(last_date, last_time)
+        if d_fmt:
+            return {"date": d_fmt, "time": t_fmt, "datetime_obj": dt_obj}
 
-            return {
-                "date": f"{h_parts[0].zfill(2)}/{h_parts[1].zfill(2)}/{h_year}",
-                "time": f"{time_clean} น.",
-                "datetime_obj": dt_obj or datetime.max
-            }
-
-    # Pattern ดั้งเดิมแบบจับทั่วไป
+    # 2. Pattern จับทั่วไป
     gen_match = re.search(
         r"(\d{1,2}[/\.-]\d{1,2}[/\.-]\d{2,4})\s+(?:เวลา\s*)?(\d{1,2}[:\.]\d{2})",
         full_text
     )
     if gen_match:
         g_date, g_time = gen_match.group(1), gen_match.group(2)
-        h_parts = re.split(r"[/\.-]", g_date)
-        if len(h_parts) == 3:
-            h_year = fix_year(h_parts[2])
-            time_clean = g_time.replace(".", ":")
-            dt_obj = None
-            try:
-                dt_obj = datetime.strptime(f"{h_parts[0].zfill(2)}/{h_parts[1].zfill(2)}/{h_year} {time_clean}", "%d/%m/%Y %H:%M")
-            except ValueError:
-                pass
+        d_fmt, t_fmt, dt_obj = parse_clean_date(g_date, g_time)
+        if d_fmt:
+            # ดักทางเพี้ยนของระบบ INC ตีกลับมาเป็นงานวันนี้
+            if d_fmt == "26/09/2026":
+                return {
+                    "date": today_str,
+                    "time": t_fmt,
+                    "datetime_obj": datetime.now()
+                }
+            return {"date": d_fmt, "time": t_fmt, "datetime_obj": dt_obj}
 
-            return {
-                "date": f"{h_parts[0].zfill(2)}/{h_parts[1].zfill(2)}/{h_year}",
-                "time": f"{time_clean} น.",
-                "datetime_obj": dt_obj or datetime.max
-            }
-
+    # 3. Fallback งานเข้าวันนี้ไม่มีนัด
     return {
         "date": "งานเข้าวันนี้/ไม่มีนัด",
         "time": "-",
@@ -148,7 +141,7 @@ def extract_circuit_id(full_text: str) -> str:
 
 
 def extract_customer_contact(full_text: str) -> tuple[str, str]:
-    """ดึงชื่อและเบอร์ติดต่อลูกค้า โดยเช็กจากส่วนข้อมูลการติดต่อลูกค้าเป็นหลัก"""
+    """ดึงชื่อและเบอร์ติดต่อลูกค้า"""
     contact_name = ""
     phone_number = ""
 
@@ -191,7 +184,7 @@ def parse_and_group_by_zone(
     target_zones: list = None,
     work_date: str = "",
 ) -> str:
-    """แกะข้อมูล จัดรูปแบบ และเรียงลำดับตั๋ว"""
+    """แกะข้อมูล จัดรูปแบบ และเรียงลำดับตั๋วเฉพาะเขตพื้นที่ของทีม"""
 
     today_dt = datetime.now()
     today_formatted = work_date if work_date else today_dt.strftime("%d/%m/%Y")
@@ -230,7 +223,14 @@ def parse_and_group_by_zone(
             continue
 
         # -------------------------------------------------------------
-        # 1. ดึง Ticket ID (เพิ่มรองรับ INC เข้าไป)
+        # 🎯 0.5 กรองเฉพาะเขตพื้นที่รับผิดชอบของทีม (MAIN_ZONES)
+        # -------------------------------------------------------------
+        active_zones = target_zones or MAIN_ZONES
+        if not any(zone in full_text for zone in active_zones):
+            continue
+
+        # -------------------------------------------------------------
+        # 1. ดึง Ticket ID
         # -------------------------------------------------------------
         ticket_id = "N/A"
         selected_ticket_elem = soup_ticket.select_one("#select2-ticketID-container")
@@ -247,7 +247,7 @@ def parse_and_group_by_zone(
         # 2. ดึงข้อมูลวัน/เวลานัดหมาย & Remark
         # -------------------------------------------------------------
         appt_data = extract_appointment_info(full_text)
-        remark_str = extract_hold_remark(full_text)  # 🎯 ดึง Remark เพิ่มเติม
+        remark_str = extract_hold_remark(full_text)
 
         # -------------------------------------------------------------
         # 3. ดึง Circuit ID & ชื่อสถานที่
@@ -289,7 +289,7 @@ def parse_and_group_by_zone(
             "contact_str": contact_disp,
             "appt_date": appt_data["date"],
             "appt_time": appt_data["time"],
-            "remark": remark_str,  # 🎯 บันทึก Remark
+            "remark": remark_str,
             "datetime_obj": appt_data["datetime_obj"]
         })
 
@@ -305,7 +305,6 @@ def parse_and_group_by_zone(
     # 7. สร้าง Output แยกหมวดหมู่
     # -------------------------------------------------------------
     today_tickets = [t for t in parsed_tickets if t["appt_date"] == today_formatted]
-    # 🎯 จุดที่ 2: ดึงเฉพาะงานค้างที่เป็นวันถัดไป (ตัดงานวันนี้ออก)
     future_tickets = [t for t in parsed_tickets if t["appt_date"] != today_formatted]
 
     output_sections = []
