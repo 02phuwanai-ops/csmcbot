@@ -79,18 +79,23 @@ def generate_daily_report(selected_zones=None, selected_employees=None, work_dat
 def process_and_send_reply(reply_token: str, target_id: str):
     """
     ดึงข้อมูลและส่งรายงานผ่าน Reply Message (ฟรี ไม่เสียโควตา)
-    หาก reply_token หมดอายุ จะ Fallback ไปใช้ Push Message สำรอง
+    ส่ง 2 ข้อความพร้อมกัน: ข้อความรับคำสั่ง + ข้อความสรุปรายงาน
     """
     try:
         report_text = generate_daily_report()
         if not report_text:
             report_text = "ℹ️ ไม่พบบันทึกงานนัดหมายของช่างในทีมสำหรับวันนี้ครับ"
 
-        # ใช้ reply_message ฟรี ไม่เสียโควตาข้อความ
-        line_bot_api.reply_message(reply_token, TextSendMessage(text=report_text))
+        # 🎯 ส่ง 2 ข้อความพร้อมกันใน reply_message เดียว (ฟรี ไม่เสียโควตา Push)
+        messages_to_send = [
+            TextSendMessage(text="⏳ รับคำสั่งเรียบร้อยแล้ว INC มาใหม่ใช้เวลา สักครู่นะครับ..."),
+            TextSendMessage(text=report_text)
+        ]
+
+        line_bot_api.reply_message(reply_token, messages_to_send)
 
     except LineBotApiError as e:
-        # หากตอบกลับช้าเกินไปจน reply_token หมดอายุ (Invalid reply token) ให้ใช้ Push Message แทน
+        # หากตอบกลับช้าเกินไปจน reply_token หมดอายุ ให้ Fallback ไปใช้ Push Message สำรอง
         if e.status_code == 400:
             logger.warning("Reply token Expired. Fallback to Push Message...")
             try:
