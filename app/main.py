@@ -111,42 +111,52 @@ def process_and_send_reply(reply_token: str, target_id: str):
             pass
 
 
+import json
+
 @app.post("/webhook")
 async def callback(request: Request, background_tasks: BackgroundTasks):
-    """Endpoint สำหรับรับ Webhook จาก LINE (รองรับทั้งแชตเดี่ยวและกลุ่ม)"""
-    signature = request.headers.get("X-Line-Signature", "")
-    body = (await request.body()).decode("utf-8")
+    """Endpoint สำหรับรับ Webhook จาก Cloudflare Router / LINE (รองรับทั้งแชตเดี่ยวและกลุ่ม)"""
+    body_bytes = await request.body()
+    body = body_bytes.decode("utf-8")
 
     try:
-        events = handler.parser.parse(body, signature)
-        for event in events:
-            if isinstance(event, MessageEvent) and isinstance(event.message, TextMessage):
-                msg_text = event.message.text.strip()
+        data = json.loads(body)
+        events = data.get("events", [])
+
+        for event_data in events:
+            if event_data.get("type") == "message" and event_data.get("message", {}).get("type") == "text":
+                msg_text = event_data["message"]["text"].strip()
+                reply_token = event_data.get("replyToken")
                 
                 # 🎯 เช็กประเภทแหล่งที่มา (กลุ่ม, ห้องแชท, หรือผู้ใช้ทั่วไป)
-                source_type = event.source.type
+                source = event_data.get("source", {})
+                source_type = source.get("type")
                 if source_type == "group":
-                    target_id = event.source.group_id
+                    target_id = source.get("groupId")
                 elif source_type == "room":
-                    target_id = event.source.room_id
+                    target_id = source.get("roomId")
                 else:
-                    target_id = event.source.user_id
+                    target_id = source.get("userId")
 
                 # คีย์เวิร์ดสำหรับดึงรายงาน
-                if msg_text in ["สรุป"]:
-                    # รันการดึงรายงานเป็น Background Task แล้วตอบกลับด้วย reply_token
-                    background_tasks.add_task(process_and_send_reply, event.reply_token, target_id)
+                if msg_text == "สรุป":
+                    # 1. แสดงไอคอน Loading Animation ทันที (ขึ้นจุดไข่ปลาขยับในแชตผู้ใช้)
+                    try:
+                        line_bot_api.show_loading_animation(target_id, loading_seconds=10)
+                    except Exception as e:
+                        logger.warning(f"Could not show loading animation: {e}")
 
-                elif msg_text in ["สวัสดี", "เมนู", "help"]:
+                    # 2. รันการดึงรายงานเป็น Background Task แล้วตอบกลับฟรีด้วย reply_token
+                    background_tasks.add_task(process_and_send_reply, reply_token, target_id)
+
+                elif msg_text.lower() in ["สวัสดี", "เมนู", "help"]:
                     line_bot_api.reply_message(
-                        event.reply_token,
+                        reply_token,
                         TextSendMessage(
                             text="🤖 CSMCBot พร้อมใช้งาน!\n\nพิมพ์คำว่า 'สรุป' เพื่อดึงรายงานตั๋วงานประจำวันได้เลยครับ"
                         ),
                     )
 
-    except InvalidSignatureError:
-        logger.error("Invalid Signature. Check LINE_CHANNEL_SECRET.")
     except LineBotApiError as e:
         logger.error(f"LINE API Error ({e.status_code}): {e.error.message}")
     except Exception as e:
