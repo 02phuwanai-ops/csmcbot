@@ -2,6 +2,8 @@
 import json
 import logging
 import os
+import threading
+import time
 from datetime import datetime
 
 import pytz
@@ -90,11 +92,38 @@ def generate_daily_report(selected_zones=None, selected_employees=None, work_dat
     return line_message_text
 
 
-def process_and_send_reply(reply_token: str, target_id: str):
+def process_and_send_reply(reply_token: str, target_id: str, user_id: str = None):
     """
     ดึงข้อมูลและส่งรายงานผ่าน Reply Message (ฟรี ไม่เสียโควตา)
     หาก reply_token หมดอายุ จะ Fallback ไปใช้ Push Message สำรอง
+    มีระบบ Keep-Alive คอยส่ง Loading Animation ซ้ำทุกๆ 50 วินาที เพื่อให้จุดวิ่งตลอด 3-4 นาที
     """
+    is_processing = True
+
+    # 📌 ฟังก์ชันช่วยวนยิง Loading Animation ซ้ำทุกๆ 50 วินาที
+    def keep_loading_alive():
+        target_user = user_id or target_id
+        # แสดงผลเฉพาะกรณีมี userId (แชตเดี่ยว)
+        if target_user and not target_user.startswith(("G", "C")):
+            while is_processing:
+                time.sleep(50)  # ยิงต่ออายุก่อนจะหมดขีดจำกัด 60 วินาทีของ LINE
+                if not is_processing:
+                    break
+                try:
+                    with ApiClient(configuration) as api_client:
+                        v3_api = MessagingApi(api_client)
+                        v3_api.show_loading_animation(
+                            ShowLoadingAnimationRequest(
+                                chat_id=target_user, loading_seconds=60
+                            )
+                        )
+                except Exception as e:
+                    logger.warning(f"Could not refresh loading animation: {e}")
+
+    # เริ่ม Thread ทำหน้าที่ต่ออายุ Loading Animation ในพื้นหลัง
+    loading_thread = threading.Thread(target=keep_loading_alive, daemon=True)
+    loading_thread.start()
+
     try:
         report_text = generate_daily_report()
         if not report_text:
@@ -123,6 +152,9 @@ def process_and_send_reply(reply_token: str, target_id: str):
             )
         except Exception:
             pass
+    finally:
+        # 🛑 หยุดตัววนยิง Loading Animation ทันทีเมื่อทำงานเสร็จ
+        is_processing = False
 
 
 @app.post("/webhook")
@@ -143,31 +175,32 @@ async def callback(request: Request, background_tasks: BackgroundTasks):
                 # 🎯 เช็กประเภทแหล่งที่มา (กลุ่ม, ห้องแชท, หรือผู้ใช้ทั่วไป)
                 source = event_data.get("source", {})
                 source_type = source.get("type")
+                user_id = source.get("userId")
+
                 if source_type == "group":
                     target_id = source.get("groupId")
                 elif source_type == "room":
                     target_id = source.get("roomId")
                 else:
-                    target_id = source.get("userId")
+                    target_id = user_id
 
                 # คีย์เวิร์ดสำหรับดึงรายงาน
                 if msg_text == "สรุป":
-                    # 1. แสดงไอคอน Loading Animation (SDK v3)
+                    # 1. แสดงไอคอน Loading Animation (เริ่มต้นตั้งไว้ 60 วินาที)
                     try:
-                        user_id = source.get("userId")
                         if user_id:
                             with ApiClient(configuration) as api_client:
                                 line_bot_api_v3 = MessagingApi(api_client)
                                 line_bot_api_v3.show_loading_animation(
                                     ShowLoadingAnimationRequest(
-                                        chat_id=user_id, loading_seconds=10
+                                        chat_id=user_id, loading_seconds=60
                                     )
                                 )
                     except Exception as e:
                         logger.warning(f"Could not show loading animation: {e}")
 
-                    # 2. รันการดึงรายงานเป็น Background Task แล้วตอบกลับด้วย reply_token
-                    background_tasks.add_task(process_and_send_reply, reply_token, target_id)
+                    # 2. รันการดึงรายงานเป็น Background Task พร้อมส่ง user_id ไปทำ Keep-Alive ต่อ
+                    background_tasks.add_task(process_and_send_reply, reply_token, target_id, user_id)
 
                 elif msg_text.lower() in ["สวัสดี", "เมนู", "help"]:
                     line_bot_api.reply_message(
