@@ -133,7 +133,7 @@ async def callback(request: Request, background_tasks: BackgroundTasks):
                     target_id = event.source.user_id
 
                 # คีย์เวิร์ดสำหรับดึงรายงาน
-                if msg_text in ["ดึงงานวันนี้", "งานวันนี้", "job", "Job", "สรุป", "สรุปวันนี้", "งาน", "งานค้าง", "report"]:
+                if msg_text in ["สรุป"]:
                     # รันการดึงรายงานเป็น Background Task แล้วตอบกลับด้วย reply_token
                     background_tasks.add_task(process_and_send_reply, event.reply_token, target_id)
 
@@ -141,7 +141,7 @@ async def callback(request: Request, background_tasks: BackgroundTasks):
                     line_bot_api.reply_message(
                         event.reply_token,
                         TextSendMessage(
-                            text="🤖 CSMCBot พร้อมใช้งาน!\n\nพิมพ์คำว่า 'สรุป' หรือ 'งานวันนี้' เพื่อดึงรายงานตั๋วงานประจำวันได้เลยครับ"
+                            text="🤖 CSMCBot พร้อมใช้งาน!\n\nพิมพ์คำว่า 'สรุป' เพื่อดึงรายงานตั๋วงานประจำวันได้เลยครับ"
                         ),
                     )
 
