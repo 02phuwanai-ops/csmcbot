@@ -115,7 +115,7 @@ import json
 
 @app.post("/webhook")
 async def callback(request: Request, background_tasks: BackgroundTasks):
-    """Endpoint สำหรับรับ Webhook จาก Cloudflare Router / LINE (รองรับทั้งแชตเดี่ยวและกลุ่ม)"""
+    """Endpoint สำหรับรับ Webhook จาก Cloudflare Router / LINE"""
     body_bytes = await request.body()
     body = body_bytes.decode("utf-8")
 
@@ -140,13 +140,15 @@ async def callback(request: Request, background_tasks: BackgroundTasks):
 
                 # คีย์เวิร์ดสำหรับดึงรายงาน
                 if msg_text == "สรุป":
-                    # 1. แสดงไอคอน Loading Animation ทันที (ขึ้นจุดไข่ปลาขยับในแชตผู้ใช้)
+                    # 1. แสดงไอคอน Loading Animation (ถ้ามี userId และ SDK รองรับ)
                     try:
-                        line_bot_api.show_loading_animation(target_id, loading_seconds=10)
+                        user_id = source.get("userId")
+                        if user_id and hasattr(line_bot_api, "show_loading_animation"):
+                            line_bot_api.show_loading_animation(user_id, loading_seconds=10)
                     except Exception as e:
                         logger.warning(f"Could not show loading animation: {e}")
 
-                    # 2. รันการดึงรายงานเป็น Background Task แล้วตอบกลับฟรีด้วย reply_token
+                    # 2. รันการดึงรายงานเป็น Background Task แล้วตอบกลับด้วย reply_token
                     background_tasks.add_task(process_and_send_reply, reply_token, target_id)
 
                 elif msg_text.lower() in ["สวัสดี", "เมนู", "help"]:
