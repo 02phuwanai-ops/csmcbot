@@ -1,15 +1,26 @@
 # app/main.py
-import os
+import json
 import logging
+import os
 from datetime import datetime
+
 import pytz
-from fastapi import FastAPI, Request, BackgroundTasks
+from fastapi import BackgroundTasks, FastAPI, Request
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError, LineBotApiError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 
+# 📌 Import สำหรับ SDK v3 (เพื่อให้จุด Loading ขึ้นบนมือถือ)
+from linebot.v3.messaging import (
+    ApiClient,
+    Configuration,
+    MessagingApi,
+    ShowLoadingAnimationRequest,
+)
+
 from app.parser import parse_and_group_by_zone
 from app.updatett import UpdateTTClient
+
 
 # 1. ตั้งค่า Logging ให้แสดงเฉพาะ WARNING/ERROR บน Production ( Render )
 IS_PRODUCTION = os.getenv("RENDER", False)
@@ -25,10 +36,13 @@ app = FastAPI(title="CSMCBot", docs_url=None, redoc_url=None)
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN", "")
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET", "")
 
-# Initialize Clients
+# Initialize Clients (รองรับทั้ง SDK v2 และ SDK v3)
 client = UpdateTTClient()
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
+
+# 📌 Configuration สำหรับ SDK v3
+configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 
 
 # 3. Endpoint สำหรับ Render Health Check และ Uptime Robot
@@ -111,8 +125,6 @@ def process_and_send_reply(reply_token: str, target_id: str):
             pass
 
 
-import json
-
 @app.post("/webhook")
 async def callback(request: Request, background_tasks: BackgroundTasks):
     """Endpoint สำหรับรับ Webhook จาก Cloudflare Router / LINE"""
@@ -140,11 +152,17 @@ async def callback(request: Request, background_tasks: BackgroundTasks):
 
                 # คีย์เวิร์ดสำหรับดึงรายงาน
                 if msg_text == "สรุป":
-                    # 1. แสดงไอคอน Loading Animation (ถ้ามี userId และ SDK รองรับ)
+                    # 1. แสดงไอคอน Loading Animation (SDK v3)
                     try:
                         user_id = source.get("userId")
-                        if user_id and hasattr(line_bot_api, "show_loading_animation"):
-                            line_bot_api.show_loading_animation(user_id, loading_seconds=10)
+                        if user_id:
+                            with ApiClient(configuration) as api_client:
+                                line_bot_api_v3 = MessagingApi(api_client)
+                                line_bot_api_v3.show_loading_animation(
+                                    ShowLoadingAnimationRequest(
+                                        chat_id=user_id, loading_seconds=10
+                                    )
+                                )
                     except Exception as e:
                         logger.warning(f"Could not show loading animation: {e}")
 
