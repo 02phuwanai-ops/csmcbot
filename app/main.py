@@ -94,16 +94,15 @@ def generate_daily_report(selected_zones=None, selected_employees=None, work_dat
 
 def process_and_send_reply(reply_token: str, target_id: str, user_id: str = None):
     """
-    ดึงข้อมูลและส่งรายงานผ่าน Reply Message (ฟรี ไม่เสียโควตา)
-    หาก reply_token หมดอายุ จะ Fallback ไปใช้ Push Message สำรอง
-    มีระบบ Keep-Alive คอยส่ง Loading Animation ซ้ำทุกๆ 50 วินาที เพื่อให้จุดวิ่งตลอด 3-4 นาที
+    ดึงข้อมูลและส่งรายงานผ่าน Reply Message
+    หาก reply_token หมดอายุหรือถูกใช้ไปแล้ว จะ Fallback ไปใช้ Push Message สำรอง
+    มีระบบ Keep-Alive คอยส่ง Loading Animation ซ้ำทุกๆ 50 วินาที สำหรับแชตเดี่ยว
     """
     is_processing = True
 
-    # 📌 ฟังก์ชันช่วยวนยิง Loading Animation ซ้ำทุกๆ 50 วินาที
+    # 📌 ฟังก์ชันช่วยวนยิง Loading Animation ซ้ำทุกๆ 50 วินาที (เฉพาะแชตเดี่ยว)
     def keep_loading_alive():
         target_user = user_id or target_id
-        # แสดงผลเฉพาะกรณีมี userId (แชตเดี่ยว)
         if target_user and not target_user.startswith(("G", "C")):
             while is_processing:
                 time.sleep(50)  # ยิงต่ออายุก่อนจะหมดขีดจำกัด 60 วินาทีของ LINE
@@ -129,13 +128,13 @@ def process_and_send_reply(reply_token: str, target_id: str, user_id: str = None
         if not report_text:
             report_text = "ℹ️ ไม่พบบันทึกงานนัดหมายของช่างในทีมสำหรับวันนี้ครับ"
 
-        # ใช้ reply_message ฟรี ไม่เสียโควตาข้อความ
+        # พยายามส่งด้วย reply_message ก่อน
         line_bot_api.reply_message(reply_token, TextSendMessage(text=report_text))
 
     except LineBotApiError as e:
-        # หากตอบกลับช้าเกินไปจน reply_token หมดอายุ (Invalid reply token) ให้ใช้ Push Message แทน
+        # หาก reply_token หมดอายุ หรือถูกใช้ไปแล้วตอนส่งข้อความตอบรับเบื้องต้นในกลุ่ม ให้ Fallback ไปใช้ Push Message
         if e.status_code == 400:
-            logger.warning("Reply token Expired. Fallback to Push Message...")
+            logger.warning("Reply token Expired or already used. Fallback to Push Message...")
             try:
                 line_bot_api.push_message(target_id, TextSendMessage(text=report_text))
             except Exception as push_err:
@@ -186,21 +185,39 @@ async def callback(request: Request, background_tasks: BackgroundTasks):
 
                 # คีย์เวิร์ดสำหรับดึงรายงาน
                 if msg_text == "สรุป":
-                    # 1. แสดงไอคอน Loading Animation (เริ่มต้นตั้งไว้ 60 วินาที)
-                    try:
-                        if user_id:
-                            with ApiClient(configuration) as api_client:
-                                line_bot_api_v3 = MessagingApi(api_client)
-                                line_bot_api_v3.show_loading_animation(
-                                    ShowLoadingAnimationRequest(
-                                        chat_id=user_id, loading_seconds=60
-                                    )
-                                )
-                    except Exception as e:
-                        logger.warning(f"Could not show loading animation: {e}")
+                    # 📌 กรณีพิมพ์ในกลุ่ม หรือ ห้องแชทหลายคน
+                    if source_type in ["group", "room"]:
+                        try:
+                            # ส่งข้อความแจ้งเตือนทันทีเพื่อให้สมาชิกในกลุ่มรับรู้ว่าบอทเริ่มทำงาน
+                            line_bot_api.reply_message(
+                                reply_token,
+                                TextSendMessage(
+                                    text="⏳ รับคำสั่งเรียบร้อยครับ! (ใช้เวลาประมวลผลประมาณ 3-4 นาที โปรดรอสักครู่)..."
+                                ),
+                            )
+                        except Exception as e:
+                            logger.warning(f"Could not send ack message to group: {e}")
 
-                    # 2. รันการดึงรายงานเป็น Background Task พร้อมส่ง user_id ไปทำ Keep-Alive ต่อ
-                    background_tasks.add_task(process_and_send_reply, reply_token, target_id, user_id)
+                        # รัน Background Task (ซึ่งจะส่งรายงานตามเข้ากลุ่มด้วย Push Message เมื่อเสร็จสิ้น)
+                        background_tasks.add_task(process_and_send_reply, reply_token, target_id, user_id)
+
+                    # 📌 กรณีพิมพ์ในแชตเดี่ยว (1-on-1)
+                    else:
+                        # 1. แสดงไอคอน Loading Animation (เริ่มต้นตั้งไว้ 60 วินาที)
+                        try:
+                            if user_id:
+                                with ApiClient(configuration) as api_client:
+                                    line_bot_api_v3 = MessagingApi(api_client)
+                                    line_bot_api_v3.show_loading_animation(
+                                        ShowLoadingAnimationRequest(
+                                            chat_id=user_id, loading_seconds=60
+                                        )
+                                    )
+                        except Exception as e:
+                            logger.warning(f"Could not show loading animation: {e}")
+
+                        # 2. รันการดึงรายงานเป็น Background Task (ส่งรายงานด้วย reply_message ฟรี 100%)
+                        background_tasks.add_task(process_and_send_reply, reply_token, target_id, user_id)
 
                 elif msg_text.lower() in ["สวัสดี", "เมนู", "help"]:
                     line_bot_api.reply_message(
