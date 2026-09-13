@@ -128,11 +128,11 @@ def process_and_send_reply(reply_token: str, target_id: str, user_id: str = None
         if not report_text:
             report_text = "ℹ️ ไม่พบบันทึกงานนัดหมายของช่างในทีมสำหรับวันนี้ครับ"
 
-        # พยายามส่งด้วย reply_message ก่อน
+        # พยายามส่งด้วย reply_message ก่อน (ไม่เสียค่า Push Message)
         line_bot_api.reply_message(reply_token, TextSendMessage(text=report_text))
 
     except LineBotApiError as e:
-        # หาก reply_token หมดอายุ หรือถูกใช้ไปแล้วตอนส่งข้อความตอบรับเบื้องต้นในกลุ่ม ให้ Fallback ไปใช้ Push Message
+        # หาก reply_token หมดอายุ ให้ Fallback ไปใช้ Push Message
         if e.status_code == 400:
             logger.warning("Reply token Expired or already used. Fallback to Push Message...")
             try:
@@ -185,20 +185,8 @@ async def callback(request: Request, background_tasks: BackgroundTasks):
 
                 # คีย์เวิร์ดสำหรับดึงรายงาน
                 if msg_text == "สรุป":
-                    # 📌 กรณีพิมพ์ในกลุ่ม หรือ ห้องแชทหลายคน
+                    # 📌 กรณีพิมพ์ในกลุ่ม หรือ ห้องแชทหลายคน (ตัดข้อความตอบรับเบื้องต้นออกแล้ว)
                     if source_type in ["group", "room"]:
-                        try:
-                            # ส่งข้อความแจ้งเตือนทันทีเพื่อให้สมาชิกในกลุ่มรับรู้ว่าบอทเริ่มทำงาน
-                            line_bot_api.reply_message(
-                                reply_token,
-                                TextSendMessage(
-                                    text="⏳ รับคำสั่งเรียบร้อยครับ! (ใช้เวลาประมวลผลประมาณ 3-4 นาที โปรดรอสักครู่)..."
-                                ),
-                            )
-                        except Exception as e:
-                            logger.warning(f"Could not send ack message to group: {e}")
-
-                        # รัน Background Task (ซึ่งจะส่งรายงานตามเข้ากลุ่มด้วย Push Message เมื่อเสร็จสิ้น)
                         background_tasks.add_task(process_and_send_reply, reply_token, target_id, user_id)
 
                     # 📌 กรณีพิมพ์ในแชตเดี่ยว (1-on-1)
