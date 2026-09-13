@@ -1,4 +1,5 @@
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from curl_cffi import requests
 from app.auth import get_authenticated_session
 
@@ -207,6 +208,41 @@ class UpdateTTClient:
 
         print(f"🎯 จากทั้งหมด {len(all_tickets)} รายการ -> คัดเหลือเฉพาะช่างในทีมและตั๋ว INC {len(filtered_tickets)} รายการ")
         return filtered_tickets
+
+    def fetch_details_in_parallel(
+        self,
+        tickets: list,
+        zone: str = "2",
+        worktype: str = "Corporate Service",
+        max_workers: int = 8
+    ) -> list:
+        """🚀 ดึงรายละเอียดตั๋วแบบขนานด้วย Multi-threading เพื่อเพิ่มความเร็ว"""
+        results = []
+        if not tickets:
+            return results
+
+        print(f"⚡ เริ่มดึงรายละเอียดตั๋วขนานกัน ({max_workers} Workers)...")
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Map แต่ละตั๋วเข้ากับการดึง Detail
+            future_to_ticket = {
+                executor.submit(self.get_ticket_detail, item, zone, worktype): item
+                for item in tickets
+            }
+
+            for future in as_completed(future_to_ticket):
+                ticket_item = future_to_ticket[future]
+                ticket_id = self.extract_ticket_id(ticket_item)
+                try:
+                    detail = future.result()
+                    if detail:
+                        results.append(detail)
+                    else:
+                        print(f"   ❌ ตั๋ว {ticket_id} ถูกข้าม (อาจติด Blacklist เขต หรือไม่มีข้อมูล)")
+                except Exception as e:
+                    print(f"❌ Error processing ticket {ticket_id}: {e}")
+
+        return results
 
     def get_ticket_activity_log(self, ticket_id: str, zone: str = "2", activity_id: str = "") -> str:
         self.ensure_authenticated_session()

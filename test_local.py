@@ -15,18 +15,9 @@ def run_test():
         print("⚠️ ไม่พบตั๋วที่ตรงตามเงื่อนไขในระบบ")
         return
 
-    # 2. ดึงรายละเอียดของแต่ละตั๋ว
+    # 2. ดึงรายละเอียดของแต่ละตั๋ว (แบบ Multi-threading ขนานกัน)
     print("🚀 [2/3] กำลังดึงรายละเอียด (Detail) ของแต่ละตั๋ว...")
-    raw_tickets_detail = []
-    for item in filtered_tickets:
-        ticket_id = client.extract_ticket_id(item)
-        print(f"   -> ดึงข้อมูลตั๋ว: {ticket_id}")
-        
-        detail = client.get_ticket_detail(item, zone="2", worktype="Corporate Service")
-        if detail:
-            raw_tickets_detail.append(detail)
-        else:
-            print(f"      ❌ ตั๋ว {ticket_id} ถูกข้าม (อาจติด Blacklist เขต หรือไม่มีข้อมูล)")
+    raw_tickets_detail = client.fetch_details_in_parallel(filtered_tickets, zone="2", worktype="Corporate Service", max_workers=8)
 
     print(f"\n✅ ดึงรายละเอียดสำเร็จทั้งหมด {len(raw_tickets_detail)} รายการ\n")
 
