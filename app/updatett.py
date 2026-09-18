@@ -114,22 +114,21 @@ class UpdateTTClient:
         return text.split()[0] if text else ""
 
     def is_target_technician(self, ticket_input) -> bool:
-        """🎯 ปรับให้ตรวจสอบ INC แบบ Case-Insensitive ได้สมบูรณ์"""
-        raw_str = str(ticket_input).upper()
+        """🎯 เช็กชื่อช่างในทีมจากข้อมูลตั๋วโดยตรง (ใช้เงื่อนไขเดิมกับทั้ง TT และ INC)"""
+        # ดึงข้อความตั๋วและตรวจสอบทั้งหมดในรูป string
+        raw_str = str(ticket_input) if isinstance(ticket_input, dict) else self.get_full_ticket_text(ticket_input)
+        raw_str_lower = raw_str.lower()
 
-        # 🎯 1. ถ้าเป็นตั๋ว INC ให้ผ่านเข้ามาประมวลผลทันที
-        if "INC" in raw_str:
-            return True
-
-        # 2. เช็กชื่อช่างในทีม (สำหรับตั๋ว TT เดิม)
+        # 1. ตรวจสอบชื่อช่างทั้ง 7 คน หรือ ชื่อหน้าช่าง ในสตริงข้อความตั๋ว
         for target in self.target_technicians:
-            if target.upper() in raw_str:
+            first_name = target.split()[0].strip().lower()  # ดึงเฉพาะชื่อหน้า เช่น "Chakares", "Naruenat"
+            if target.lower() in raw_str_lower or first_name in raw_str_lower:
                 return True
 
-        # 3. ป้องกันตั๋ว HOLD SLA / BMAE4 หลุด
+        # 2. ป้องกันตั๋ว HOLD SLA / BMAE4 หลุด
         keywords_bypass = ["HOLD", "SLAHOLD", "WW-BMAE4-CORP", "BMAE4"]
         for kw in keywords_bypass:
-            if kw in raw_str:
+            if kw.lower() in raw_str_lower:
                 return True
 
         return False
