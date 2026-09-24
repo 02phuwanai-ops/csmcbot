@@ -51,25 +51,43 @@ def extract_hold_remark(full_text: str) -> str:
     return ""
 
 
-def extract_appointment_info(full_text: str) -> dict:
-    """ดึงวันที่และเวลานัดหมาย แก้อาการ MM/DD/YYYY เพี้ยน"""
-    current_year = datetime.now().year
-    today_str = datetime.now().strftime("%d/%m/%Y")
+def extract_appointment_info(full_text: str, res_json: dict = None) -> dict:
+    """ดึงวันที่และเวลานัดหมาย โดยยึดค่าจาก res_json เป็นหลักก่อน"""
+    today_dt = datetime.now()
+    today_str = today_dt.strftime("%d/%m/%Y")
+    current_year = today_dt.year
+
+    # 🎯 1. ตรวจสอบจาก res_json (ค่าที่ updatett.py ส่งมาให้)
+    if isinstance(res_json, dict):
+        target_dt_str = (
+            res_json.get("appointment_date")
+            or res_json.get("appointmentDate")
+            or res_json.get("ExpectDate")
+            or ""
+        )
+        if target_dt_str:
+            # รูปแบบ "DD/MM/YYYY เวลา HH:MM น." หรือ "DD/MM/YYYY HH:MM"
+            m_formatted = re.search(r"(\d{1,2}/\d{1,2}/\d{4})\s*(?:เวลา\s*)?(\d{1,2}:\d{2})", target_dt_str)
+            if m_formatted:
+                d_str, t_str = m_formatted.group(1), m_formatted.group(2)
+                try:
+                    dt_obj = datetime.strptime(f"{d_str} {t_str}", "%d/%m/%Y %H:%M")
+                    return {"date": d_str, "time": f"{t_str} น.", "datetime_obj": dt_obj}
+                except ValueError:
+                    pass
 
     def parse_clean_date(d_str: str, t_str: str):
         parts = re.split(r"[/\.-]", d_str)
         if len(parts) != 3:
             return None, None, None
 
-        p1, p2, p3 = int(parts[0]), int(parts[1]), parts[2]
-        
-        year = str(current_year)
+        p1, p2, p3 = int(parts[0]), int(parts[1]), str(parts[2])
         if len(p3) == 2:
-            year = f"20{p3}" if 20 <= int(p3) <= 30 else str(current_year)
-        elif len(p3) == 4:
-            year = p3
+            year_val = int(f"20{p3}")
+            year = str(year_val) if year_val >= current_year else str(current_year)
+        else:
+            year = str(p3) if int(p3) >= current_year else str(current_year)
 
-        # ดักจับ MM/DD/YYYY (เช่น 09/26/2026 -> 26/09/2026)
         if p1 <= 12 and p2 > 12:
             day, month = p2, p1
         else:
@@ -78,7 +96,6 @@ def extract_appointment_info(full_text: str) -> dict:
         time_clean = t_str.replace(".", ":")
         date_formatted = f"{day:02d}/{month:02d}/{year}"
         
-        dt_obj = None
         try:
             dt_obj = datetime.strptime(f"{date_formatted} {time_clean}", "%d/%m/%Y %H:%M")
         except ValueError:
@@ -86,7 +103,7 @@ def extract_appointment_info(full_text: str) -> dict:
 
         return date_formatted, f"{time_clean} น.", dt_obj
 
-    # 1. Pattern Hold SLA
+    # 🎯 2. Pattern Hold SLA (กรณีนัดอนาคตจาก HOLD)
     hold_matches = re.findall(
         r"to\s+(\d{1,2}[/\.-]\d{1,2}[/\.-]\d{2,4})\s+(\d{1,2}[:\.]\d{2})",
         full_text, re.IGNORECASE
@@ -97,29 +114,19 @@ def extract_appointment_info(full_text: str) -> dict:
         if d_fmt:
             return {"date": d_fmt, "time": t_fmt, "datetime_obj": dt_obj}
 
-    # 2. Pattern จับทั่วไป
-    gen_match = re.search(
-        r"(\d{1,2}[/\.-]\d{1,2}[/\.-]\d{2,4})\s+(?:เวลา\s*)?(\d{1,2}[:\.]\d{2})",
-        full_text
-    )
-    if gen_match:
-        g_date, g_time = gen_match.group(1), gen_match.group(2)
-        d_fmt, t_fmt, dt_obj = parse_clean_date(g_date, g_time)
-        if d_fmt:
-            # ดักทางเพี้ยนของระบบ INC ตีกลับมาเป็นงานวันนี้
-            if d_fmt == "26/09/2026":
-                return {
-                    "date": today_str,
-                    "time": t_fmt,
-                    "datetime_obj": datetime.now()
-                }
-            return {"date": d_fmt, "time": t_fmt, "datetime_obj": dt_obj}
+    # 🎯 3. ดึงเวลาอย่างเดียว หากไม่มีวันที่นัดหมายระบุชัดเจน ให้ยึดเป็นวันนี้
+    time_only_match = re.search(r"เวลา\s*(\d{1,2}[:\.]\d{2})", full_text)
+    time_val = time_only_match.group(1).replace(".", ":") if time_only_match else "00:00"
+    
+    try:
+        dt_obj = datetime.strptime(f"{today_str} {time_val}", "%d/%m/%Y %H:%M")
+    except ValueError:
+        dt_obj = today_dt
 
-    # 3. Fallback งานเข้าวันนี้ไม่มีนัด
     return {
-        "date": "งานเข้าวันนี้/ไม่มีนัด",
-        "time": "-",
-        "datetime_obj": datetime.now()
+        "date": today_str,
+        "time": f"{time_val} น." if time_only_match else "-",
+        "datetime_obj": dt_obj
     }
 
 
@@ -217,7 +224,7 @@ def parse_and_group_by_zone(
         full_text = f"{ticket_text} {circuit_text} {raw_json_str}"
 
         # -------------------------------------------------------------
-        # 0. ตรวจสอบตั๋วปิดงาน (เพิ่มคีย์เวิร์ดครอบคลุมเพื่อป้องกันตั๋วปิดแล้วหลุดเข้ามา)
+        # 0. ตรวจสอบตั๋วปิดงาน
         # -------------------------------------------------------------
         close_patterns = [
             r"ช่าง(?:พื้นที่)?\s*.*?\s*ขอปิดงาน",
@@ -254,9 +261,9 @@ def parse_and_group_by_zone(
             ticket_id = ticket_m.group(1) if ticket_m else "N/A"
 
         # -------------------------------------------------------------
-        # 2. ดึงข้อมูลวัน/เวลานัดหมาย & Remark
+        # 2. ดึงข้อมูลวัน/เวลานัดหมาย & Remark (ส่ง res_json เข้าไปเช็กก่อน)
         # -------------------------------------------------------------
-        appt_data = extract_appointment_info(full_text)
+        appt_data = extract_appointment_info(full_text, res_json=res_json)
         remark_str = extract_hold_remark(full_text)
 
         # -------------------------------------------------------------

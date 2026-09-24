@@ -318,13 +318,33 @@ class UpdateTTClient:
                     hold_info = self.parse_hold_sla(activity_log_text, raw_data=result_dict)
                     result_dict["hold_info"] = hold_info
 
-                    if hold_info.get("reschedule_time"):
+                    # 🎯 1️⃣ [หลัก] ถ้ามีการโฮ (HOLD SLA) -> ให้ใช้วันเวลานัดหมายโฮเป็นหลักทันที
+                    if hold_info.get("is_hold") and hold_info.get("reschedule_time"):
                         real_time = hold_info["reschedule_time"]
                         result_dict["ExpectDate"] = real_time
                         result_dict["appointmentDate"] = real_time
                         result_dict["appointment_date"] = real_time
                         result_dict["appointDate"] = real_time
                         result_dict["appoint_date"] = real_time
+                    
+                    # 🎯 2️⃣ [งานเข้าใหม่] ถ้ายังไม่ได้โฮ -> ให้ใช้ OpenDate (วันที่เปิดตั๋วรับงาน) เพื่อจัดเข้างานวันนี้
+                    else:
+                        open_date_raw = result_dict.get("OpenDate") or result_dict.get("openDate") or result_dict.get("open_date") or ""
+                        
+                        formatted_open_date = open_date_raw
+                        if open_date_raw and len(open_date_raw.split()) == 2:
+                            date_part, time_part = open_date_raw.split()
+                            d_p = date_part.split('/')
+                            if len(d_p) == 3:
+                                dd, mm, yy = d_p[0].zfill(2), d_p[1].zfill(2), d_p[2]
+                                yyyy = f"20{yy}" if len(yy) == 2 else yy
+                                formatted_open_date = f"{dd}/{mm}/{yyyy} เวลา {time_part} น."
+
+                        result_dict["ExpectDate"] = formatted_open_date
+                        result_dict["appointmentDate"] = formatted_open_date
+                        result_dict["appointment_date"] = formatted_open_date
+                        result_dict["appointDate"] = formatted_open_date
+                        result_dict["appoint_date"] = formatted_open_date
 
                     return result_dict
             except Exception as e:
@@ -336,19 +356,6 @@ class UpdateTTClient:
 
         return {}
 
-    def extract_customer_phone(self, raw_data: dict) -> str:
-        if not raw_data:
-            return None
-            
-        text_corp = f"{raw_data.get('custMobile', '')} {raw_data.get('custTel', '')} {raw_data.get('remark', '')} {str(raw_data)}"
-        found_phones = re.findall(r'0[689]\d{8}', text_corp)
-        
-        for phone in found_phones:
-            if phone not in self.tech_phones:
-                return phone
-                
-        return None
-
     @staticmethod
     def parse_hold_sla(log_text: str, raw_data: dict = None) -> dict:
         result = {"is_hold": False, "reschedule_time": None, "reason": None}
@@ -358,28 +365,35 @@ class UpdateTTClient:
         clean_text = re.sub(r'<[^>]+>', ' ', log_text)
         clean_text = re.sub(r'\s+', ' ', clean_text)
 
-        if "HOLD" in clean_text.upper():
-            result["is_hold"] = True
+        # 🎯 ต้องมีคำว่า HOLD SLA หรือ SLA HOLD ใน Log จริงๆ เท่านั้น
+        if "HOLD SLA" in clean_text.upper() or "SLA HOLD" in clean_text.upper():
+            pattern = r'HOLD\s+SLA\s*\([^)]*?\bto\s+(\d{1,2}/\d{1,2}/\d{2,4}\s+\d{1,2}:\d{2})\)'
+            match = re.search(pattern, clean_text, re.IGNORECASE)
 
-        pattern = r'HOLD\s+SLA\s*\([^)]*?\bto\s+(\d{1,2}/\d{1,2}/\d{2,4}\s+\d{1,2}:\d{2})\)'
-        match = re.search(pattern, clean_text, re.IGNORECASE)
+            if match:
+                result["is_hold"] = True
+                raw_dt = match.group(1).strip()
+                parts = raw_dt.split()
+                if len(parts) == 2:
+                    d_p = parts[0].split('/')
+                    if len(d_p) == 3:
+                        p1, p2, p3 = int(d_p[0]), int(d_p[1]), int(d_p[2])
+                        
+                        # แปลงฟอร์แมต MM/DD/YY vs DD/MM/YY
+                        if p2 > 12:
+                            mm, dd, yy = str(p1).zfill(2), str(p2).zfill(2), str(p3)
+                        else:
+                            dd, mm, yy = str(p1).zfill(2), str(p2).zfill(2), str(p3)
+                        
+                        yyyy = f"20{yy}" if len(str(yy)) == 2 else str(yy)
+                        if int(yyyy) < 2026:
+                            yyyy = "2026"
 
-        if match:
-            raw_dt = match.group(1).strip()
-            parts = raw_dt.split()
-            if len(parts) == 2:
-                d_p = parts[0].split('/')
-                if len(d_p) == 3:
-                    dd, mm, yy = d_p[0].zfill(2), d_p[1].zfill(2), d_p[2]
-                    yyyy = f"20{yy}" if len(yy) == 2 else yy
-                    result["reschedule_time"] = f"{dd}/{mm}/{yyyy} เวลา {parts[1]} น."
-                else:
-                    result["reschedule_time"] = raw_dt
-            else:
-                result["reschedule_time"] = raw_dt
+                        result["reschedule_time"] = f"{dd}/{mm}/{yyyy} เวลา {parts[1]} น."
 
-        reason_match = re.search(r'เนื่องจาก\s*([^\s<]+(?:\s+[^\s<]+)*)', clean_text)
-        if reason_match:
-            result["reason"] = reason_match.group(0).strip()
+            reason_match = re.search(r'เนื่องจาก\s*([^\s<]+(?:\s+[^\s<]+)*)', clean_text)
+            if reason_match:
+                result["reason"] = reason_match.group(0).strip()
 
+        # 🚫 ถ้าไม่มี HOLD SLA ให้คืนค่า reschedule_time เป็น None เสมอ
         return result
