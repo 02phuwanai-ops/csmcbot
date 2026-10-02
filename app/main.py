@@ -7,7 +7,7 @@ import time
 from datetime import datetime
 
 import pytz
-from fastapi import BackgroundTasks, FastAPI, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError, LineBotApiError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
@@ -221,3 +221,50 @@ async def callback(request: Request, background_tasks: BackgroundTasks):
         logger.error(f"Error handling webhook: {e}")
 
     return "OK"
+
+
+# ==========================================
+# 📌 เพิ่มฟังก์ชันสำหรับ Cron-Job (โพสต์อัตโนมัติ)
+# ==========================================
+
+# 1. ใส่ Group ID หรือ Room ID ของกลุ่ม LINE ที่ต้องการให้โพสต์
+# 1. ใส่ Group ID ของกลุ่ม LINE ที่ต้องการให้โพสต์
+AUTO_POST_GROUP_ID = "C4c22bf241dc4c2a48d159beb39e59314"  # 👈 นำ Group ID ของคุณมาใส่ตรงนี้
+
+# 2. ตั้ง Secret Key เพื่อความปลอดภัย (กำหนดขึ้นมาเองได้เลย)
+CRON_SECRET_KEY = "30633063"  # 👈 ตั้งรหัสผ่านของคุณเองตรงนี้
+
+
+def execute_auto_report():
+    """ฟังก์ชันทำงานเบื้องหลัง: ดึงรายงานและส่ง Push Message เข้ากลุ่ม LINE"""
+    try:
+        logger.info("⏰ เริ่มประมวลผลรายงานอัตโนมัติสำหรับ Cron-Job...")
+        
+        # ดึงรายงานด้วยฟังก์ชัน generate_daily_report()
+        report_text = generate_daily_report()
+        if not report_text:
+            report_text = "ℹ️ ไม่พบบันทึกงานนัดหมายของช่างในทีมสำหรับวันนี้ครับ"
+
+        # ส่งข้อความแบบ Push Message เข้ากลุ่ม LINE
+        line_bot_api.push_message(
+            AUTO_POST_GROUP_ID,
+            TextSendMessage(text=report_text)
+        )
+        logger.info("✅ [Cron-Job] ส่งรายงานเข้ากลุ่ม LINE เรียบร้อยแล้ว!")
+    except Exception as e:
+        logger.error(f"❌ [Cron-Job] เกิดข้อผิดพลาดในการส่งรายงาน: {e}")
+
+
+@app.get("/api/trigger-cron-report")
+async def trigger_cron_report(
+    background_tasks: BackgroundTasks, 
+    key: str = Query(..., description="Secret Key สำหรับยืนยันตัวตน")
+):
+    """Endpoint สำหรับให้ Cron-job.org ยิงเข้ามาตามเวลาที่กำหนด"""
+    if key != CRON_SECRET_KEY:
+        raise HTTPException(status_code=403, detail="Unauthorized key")
+
+    # สั่งให้ประมวลผลใน Background Tasks เพื่อตอบกลับ Cron-Job ทันทีและป้องกัน Timeout
+    background_tasks.add_task(execute_auto_report)
+    
+    return {"status": "success", "message": "Report task queued successfully"}
