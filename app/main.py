@@ -92,6 +92,44 @@ def generate_daily_report(selected_zones=None, selected_employees=None, work_dat
     return line_message_text
 
 
+def send_split_line_messages(target_id: str, full_text: str, reply_token: str = None, max_length: int = 4000):
+    """
+    ฟังก์ชันสำหรับตัดแบ่งข้อความยาวๆ เป็นหลายๆ ข้อความ (ไม่เกิน 4,000 ตัวอักษรต่อกล่อง) 
+    เพื่อป้องกันไม่ให้เกินลิมิต 5,000 ตัวอักษรของ LINE API
+    """
+    lines = full_text.split("\n")
+    chunks = []
+    current_chunk = ""
+
+    for line in lines:
+        if len(current_chunk) + len(line) + 1 > max_length:
+            if current_chunk.strip():
+                chunks.append(current_chunk.strip())
+            current_chunk = line + "\n"
+        else:
+            current_chunk += line + "\n"
+
+    if current_chunk.strip():
+        chunks.append(current_chunk.strip())
+
+    if not chunks:
+        return
+
+    # ส่งข้อความแรกผ่าน reply_message (ถ้ามี reply_token และเป็นการส่งตอบกลับ)
+    first_index = 0
+    if reply_token:
+        try:
+            line_bot_api.reply_message(reply_token, TextSendMessage(text=chunks[0]))
+            first_index = 1
+        except Exception as e:
+            logger.warning(f"Reply message failed or token expired, switching to push: {e}")
+            first_index = 0
+
+    # ข้อความที่เหลือทั้งหมดส่งด้วย push_message
+    for i in range(first_index, len(chunks)):
+        line_bot_api.push_message(target_id, TextSendMessage(text=chunks[i]))
+
+
 def process_and_send_reply(reply_token: str, target_id: str, user_id: str = None):
     """
     ดึงข้อมูลและส่งรายงานผ่าน Reply Message
@@ -128,19 +166,8 @@ def process_and_send_reply(reply_token: str, target_id: str, user_id: str = None
         if not report_text:
             report_text = "ℹ️ ไม่พบบันทึกงานนัดหมายของช่างในทีมสำหรับวันนี้ครับ"
 
-        # พยายามส่งด้วย reply_message ก่อน (ไม่เสียค่า Push Message)
-        line_bot_api.reply_message(reply_token, TextSendMessage(text=report_text))
-
-    except LineBotApiError as e:
-        # หาก reply_token หมดอายุ ให้ Fallback ไปใช้ Push Message
-        if e.status_code == 400:
-            logger.warning("Reply token Expired or already used. Fallback to Push Message...")
-            try:
-                line_bot_api.push_message(target_id, TextSendMessage(text=report_text))
-            except Exception as push_err:
-                logger.error(f"Fallback Push Error: {push_err}")
-        else:
-            logger.error(f"LINE Reply Error ({e.status_code}): {e.error.message}")
+        # แบ่งส่งข้อความอัตโนมัติป้องกันติด 5,000 ตัวอักษร
+        send_split_line_messages(target_id=target_id, full_text=report_text, reply_token=reply_token)
 
     except Exception as e:
         logger.error(f"Error processing report: {e}")
@@ -227,12 +254,11 @@ async def callback(request: Request, background_tasks: BackgroundTasks):
 # 📌 เพิ่มฟังก์ชันสำหรับ Cron-Job (โพสต์อัตโนมัติ)
 # ==========================================
 
-# 1. ใส่ Group ID หรือ Room ID ของกลุ่ม LINE ที่ต้องการให้โพสต์
 # 1. ใส่ Group ID ของกลุ่ม LINE ที่ต้องการให้โพสต์
-AUTO_POST_GROUP_ID = "C4c22bf241dc4c2a48d159beb39e59314"  # 👈 นำ Group ID ของคุณมาใส่ตรงนี้
+AUTO_POST_GROUP_ID = "C4c22bf241dc4c2a48d159beb39e59314"
 
-# 2. ตั้ง Secret Key เพื่อความปลอดภัย (กำหนดขึ้นมาเองได้เลย)
-CRON_SECRET_KEY = "30633063"  # 👈 ตั้งรหัสผ่านของคุณเองตรงนี้
+# 2. ตั้ง Secret Key เพื่อความปลอดภัย
+CRON_SECRET_KEY = "30633063"
 
 
 def execute_auto_report():
@@ -245,11 +271,8 @@ def execute_auto_report():
         if not report_text:
             report_text = "ℹ️ ไม่พบบันทึกงานนัดหมายของช่างในทีมสำหรับวันนี้ครับ"
 
-        # ส่งข้อความแบบ Push Message เข้ากลุ่ม LINE
-        line_bot_api.push_message(
-            AUTO_POST_GROUP_ID,
-            TextSendMessage(text=report_text)
-        )
+        # แบ่งส่งข้อความอัตโนมัติ ไม่เกิน 4,000 ตัวอักษรต่อบอลลูน
+        send_split_line_messages(target_id=AUTO_POST_GROUP_ID, full_text=report_text)
         logger.info("✅ [Cron-Job] ส่งรายงานเข้ากลุ่ม LINE เรียบร้อยแล้ว!")
     except Exception as e:
         logger.error(f"❌ [Cron-Job] เกิดข้อผิดพลาดในการส่งรายงาน: {e}")
