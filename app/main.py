@@ -30,7 +30,7 @@ logging.basicConfig(
     level=logging.WARNING if IS_PRODUCTION else logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
-logger = logging.getLogger("csmcbot")
+logger = logger = logging.getLogger("csmcbot")
 
 app = FastAPI(title="CSMCBot", docs_url=None, redoc_url=None)
 
@@ -92,11 +92,15 @@ def generate_daily_report(selected_zones=None, selected_employees=None, work_dat
     return line_message_text
 
 
-def send_split_line_messages(target_id: str, full_text: str, reply_token: str = None, max_length: int = 4000):
+def send_split_line_messages(target_id: str, full_text: str, reply_token: str = None, max_length: int = 3500):
     """
-    ฟังก์ชันสำหรับตัดแบ่งข้อความยาวๆ เป็นหลายๆ ข้อความ (ไม่เกิน 4,000 ตัวอักษรต่อกล่อง) 
-    เพื่อป้องกันไม่ให้เกินลิมิต 5,000 ตัวอักษรของ LINE API
+    ฟังก์ชันแบ่งส่งข้อความให้อยู่ในโควตาของ LINE API ป้องกัน Error 400
+    - หั่นข้อความไม่เกิน 3,500 ตัวอักษรต่อบอลลูน
+    - รวมเป็น List แล้วยิงพร้อมกันทีเดียว (ไม่เกิน 5 บอลลูนต่อ Request)
     """
+    if not full_text or not full_text.strip():
+        return
+
     lines = full_text.split("\n")
     chunks = []
     current_chunk = ""
@@ -115,35 +119,39 @@ def send_split_line_messages(target_id: str, full_text: str, reply_token: str = 
     if not chunks:
         return
 
-    # ส่งข้อความแรกผ่าน reply_message (ถ้ามี reply_token และเป็นการส่งตอบกลับ)
-    first_index = 0
+    # ลิมิต LINE API ส่งได้สูงสุด 5 บอลลูนต่อ 1 Request
+    chunks = chunks[:5]
+    messages_to_send = [TextSendMessage(text=c) for c in chunks if c.strip()]
+
+    if not messages_to_send:
+        return
+
+    # กรณีส่งตอบกลับผ่าน Webhook
     if reply_token:
         try:
-            line_bot_api.reply_message(reply_token, TextSendMessage(text=chunks[0]))
-            first_index = 1
+            line_bot_api.reply_message(reply_token, messages_to_send)
+            return
         except Exception as e:
-            logger.warning(f"Reply message failed or token expired, switching to push: {e}")
-            first_index = 0
+            logger.warning(f"Reply message failed, switching to push_message: {e}")
 
-    # ข้อความที่เหลือทั้งหมดส่งด้วย push_message
-    for i in range(first_index, len(chunks)):
-        line_bot_api.push_message(target_id, TextSendMessage(text=chunks[i]))
+    # กรณีส่งแบบ Push Message (Cron-Job หรือ Fallback)
+    try:
+        line_bot_api.push_message(target_id, messages_to_send)
+    except LineBotApiError as e:
+        logger.error(f"Push Message Error ({e.status_code}): {e.error.message}")
 
 
 def process_and_send_reply(reply_token: str, target_id: str, user_id: str = None):
     """
-    ดึงข้อมูลและส่งรายงานผ่าน Reply Message
-    หาก reply_token หมดอายุหรือถูกใช้ไปแล้ว จะ Fallback ไปใช้ Push Message สำรอง
-    มีระบบ Keep-Alive คอยส่ง Loading Animation ซ้ำทุกๆ 50 วินาที สำหรับแชตเดี่ยว
+    ดึงข้อมูลและส่งรายงานผ่าน Reply Message (สำหรับงานกดสั่ง manual 'สรุป')
     """
     is_processing = True
 
-    # 📌 ฟังก์ชันช่วยวนยิง Loading Animation ซ้ำทุกๆ 50 วินาที (เฉพาะแชตเดี่ยว)
     def keep_loading_alive():
         target_user = user_id or target_id
         if target_user and not target_user.startswith(("G", "C")):
             while is_processing:
-                time.sleep(50)  # ยิงต่ออายุก่อนจะหมดขีดจำกัด 60 วินาทีของ LINE
+                time.sleep(50)
                 if not is_processing:
                     break
                 try:
@@ -157,7 +165,6 @@ def process_and_send_reply(reply_token: str, target_id: str, user_id: str = None
                 except Exception as e:
                     logger.warning(f"Could not refresh loading animation: {e}")
 
-    # เริ่ม Thread ทำหน้าที่ต่ออายุ Loading Animation ในพื้นหลัง
     loading_thread = threading.Thread(target=keep_loading_alive, daemon=True)
     loading_thread.start()
 
@@ -166,7 +173,7 @@ def process_and_send_reply(reply_token: str, target_id: str, user_id: str = None
         if not report_text:
             report_text = "ℹ️ ไม่พบบันทึกงานนัดหมายของช่างในทีมสำหรับวันนี้ครับ"
 
-        # แบ่งส่งข้อความอัตโนมัติป้องกันติด 5,000 ตัวอักษร
+        # ส่งข้อความแบบแมนนวล (ดึงทั้งวันนี้และวันถัดไป)
         send_split_line_messages(target_id=target_id, full_text=report_text, reply_token=reply_token)
 
     except Exception as e:
@@ -179,7 +186,6 @@ def process_and_send_reply(reply_token: str, target_id: str, user_id: str = None
         except Exception:
             pass
     finally:
-        # 🛑 หยุดตัววนยิง Loading Animation ทันทีเมื่อทำงานเสร็จ
         is_processing = False
 
 
@@ -198,7 +204,6 @@ async def callback(request: Request, background_tasks: BackgroundTasks):
                 msg_text = event_data["message"]["text"].strip()
                 reply_token = event_data.get("replyToken")
                 
-                # 🎯 เช็กประเภทแหล่งที่มา (กลุ่ม, ห้องแชท, หรือผู้ใช้ทั่วไป)
                 source = event_data.get("source", {})
                 source_type = source.get("type")
                 user_id = source.get("userId")
@@ -210,15 +215,10 @@ async def callback(request: Request, background_tasks: BackgroundTasks):
                 else:
                     target_id = user_id
 
-                # คีย์เวิร์ดสำหรับดึงรายงาน
                 if msg_text == "สรุป":
-                    # 📌 กรณีพิมพ์ในกลุ่ม หรือ ห้องแชทหลายคน (ตัดข้อความตอบรับเบื้องต้นออกแล้ว)
                     if source_type in ["group", "room"]:
                         background_tasks.add_task(process_and_send_reply, reply_token, target_id, user_id)
-
-                    # 📌 กรณีพิมพ์ในแชตเดี่ยว (1-on-1)
                     else:
-                        # 1. แสดงไอคอน Loading Animation (เริ่มต้นตั้งไว้ 60 วินาที)
                         try:
                             if user_id:
                                 with ApiClient(configuration) as api_client:
@@ -231,7 +231,6 @@ async def callback(request: Request, background_tasks: BackgroundTasks):
                         except Exception as e:
                             logger.warning(f"Could not show loading animation: {e}")
 
-                        # 2. รันการดึงรายงานเป็น Background Task (ส่งรายงานด้วย reply_message ฟรี 100%)
                         background_tasks.add_task(process_and_send_reply, reply_token, target_id, user_id)
 
                 elif msg_text.lower() in ["สวัสดี", "เมนู", "help"]:
@@ -251,27 +250,26 @@ async def callback(request: Request, background_tasks: BackgroundTasks):
 
 
 # ==========================================
-# 📌 เพิ่มฟังก์ชันสำหรับ Cron-Job (โพสต์อัตโนมัติ)
+# 📌 ฟังก์ชันสำหรับ Cron-Job (โพสต์อัตโนมัติ)
 # ==========================================
 
-# 1. ใส่ Group ID ของกลุ่ม LINE ที่ต้องการให้โพสต์
 AUTO_POST_GROUP_ID = "C4c22bf241dc4c2a48d159beb39e59314"
-
-# 2. ตั้ง Secret Key เพื่อความปลอดภัย
 CRON_SECRET_KEY = "30633063"
 
 
 def execute_auto_report():
-    """ฟังก์ชันทำงานเบื้องหลัง: ดึงรายงานและส่ง Push Message เข้ากลุ่ม LINE"""
+    """ฟังก์ชันทำงานเบื้องหลัง: ดึงเฉพาะงานวันนี้ และส่ง Push Message เข้ากลุ่ม LINE"""
     try:
         logger.info("⏰ เริ่มประมวลผลรายงานอัตโนมัติสำหรับ Cron-Job...")
         
-        # ดึงรายงานด้วยฟังก์ชัน generate_daily_report()
         report_text = generate_daily_report()
         if not report_text:
             report_text = "ℹ️ ไม่พบบันทึกงานนัดหมายของช่างในทีมสำหรับวันนี้ครับ"
 
-        # แบ่งส่งข้อความอัตโนมัติ ไม่เกิน 4,000 ตัวอักษรต่อบอลลูน
+        # 📌 ตัดข้อความเอาเฉพาะส่วน "งานค้างนัดวันนี้" เพื่อลดความยาวข้อความในการส่งอัตโนมัติ
+        if "----------------------------------" in report_text:
+            report_text = report_text.split("----------------------------------")[0].strip()
+
         send_split_line_messages(target_id=AUTO_POST_GROUP_ID, full_text=report_text)
         logger.info("✅ [Cron-Job] ส่งรายงานเข้ากลุ่ม LINE เรียบร้อยแล้ว!")
     except Exception as e:
@@ -287,7 +285,5 @@ async def trigger_cron_report(
     if key != CRON_SECRET_KEY:
         raise HTTPException(status_code=403, detail="Unauthorized key")
 
-    # สั่งให้ประมวลผลใน Background Tasks เพื่อตอบกลับ Cron-Job ทันทีและป้องกัน Timeout
     background_tasks.add_task(execute_auto_report)
-    
     return {"status": "success", "message": "Report task queued successfully"}
