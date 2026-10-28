@@ -10,7 +10,7 @@ class UpdateTTClient:
         self.base_url = "https://csmcbot.truecorp.co.th/updatett/Updatett"
         self.session = requests.Session(impersonate="chrome120")
 
-        # 1. รายชื่อช่าง 7 คน
+        # 1. รายชื่อช่างทีมเดิม (ทีมที่ 1)
         self.target_technicians = [
             "Wittaya Saomoke",
             "Supoj Kaeokhrueng",
@@ -21,7 +21,7 @@ class UpdateTTClient:
             "Pollawat",
         ]
 
-        # 2. รายชื่อ 6 เขต/แขวงที่อนุญาต
+        # 2. รายชื่อ 6 เขต/แขวงที่อนุญาต (ทีมเดิม)
         self.allowed_districts = [
             # 1. บางจาก / พระโขนง
             "บางจาก", "พระโขนง",
@@ -33,14 +33,30 @@ class UpdateTTClient:
             "คลองตันเหนือ", "วัฒนา", "สุขุมวิท",
             # 5. จรเข้บัว / ลาดพร้าว
             "จรเข้บัว", "ลาดพร้าว", "ลาดพร้าววังหิน",
-            # 6. พลับพลา / วังทองหลาง
+            # 6. พลับพลา /วังทองหลาง
             "พลับพลา", "วังทองหลาง",
         ]
 
-        # 🚫 Blacklist เขตที่ไม่ต้องการดึง (เช่น ดินแดง)
+        # 🚫 Blacklist เขตที่ไม่ต้องการดึงของทีมเดิม (เช่น ดินแดง)
         self.excluded_districts = [
             "ดินแดง",
         ]
+
+        # ==========================================
+        # 📌 เพิ่มโครงสร้างข้อมูลสำหรับ "ทีมที่ 2" (แยกอิสระ)
+        # ==========================================
+        self.team2_technicians = [
+            "Chetha Chuthasri",
+            "Kiattisak Kopumee",
+            "Rachan Preeda",
+            "Uttakich Yos-in",
+            "Rattanapol Dangprasertkul",
+        ]
+
+        self.team2_allowed_districts = [
+            "ราชเทวี", "พญาไท", "ปทุมวัน", "ดินแดง"
+        ]
+        # ==========================================
 
         # 3. Blacklist เบอร์โทรช่าง
         self.tech_phones = [
@@ -114,18 +130,34 @@ class UpdateTTClient:
         return text.split()[0] if text else ""
 
     def is_target_technician(self, ticket_input) -> bool:
-        """🎯 เช็กชื่อช่างในทีมจากข้อมูลตั๋วโดยตรง (ใช้เงื่อนไขเดิมกับทั้ง TT และ INC)"""
-        # ดึงข้อความตั๋วและตรวจสอบทั้งหมดในรูป string
+        """🎯 เช็กชื่อช่างในทีม (ทีมที่ 1) จากข้อมูลตั๋วโดยตรง"""
         raw_str = str(ticket_input) if isinstance(ticket_input, dict) else self.get_full_ticket_text(ticket_input)
         raw_str_lower = raw_str.lower()
 
-        # 1. ตรวจสอบชื่อช่างทั้ง 7 คน หรือ ชื่อหน้าช่าง ในสตริงข้อความตั๋ว
         for target in self.target_technicians:
-            first_name = target.split()[0].strip().lower()  # ดึงเฉพาะชื่อหน้า เช่น "Chakares", "Naruenat"
+            first_name = target.split()[0].strip().lower()
             if target.lower() in raw_str_lower or first_name in raw_str_lower:
                 return True
 
-        # 2. ป้องกันตั๋ว HOLD SLA / BMAE4 หลุด
+        keywords_bypass = ["HOLD", "SLAHOLD", "WW-BMAE4-CORP", "BMAE4"]
+        for kw in keywords_bypass:
+            if kw.lower() in raw_str_lower:
+                return True
+
+        return False
+
+    # ==========================================
+    # 📌 ฟังก์ชันตรวจสอบช่างของ "ทีมที่ 2" โดยเฉพาะ
+    # ==========================================
+    def is_team2_technician(self, ticket_input) -> bool:
+        raw_str = str(ticket_input) if isinstance(ticket_input, dict) else self.get_full_ticket_text(ticket_input)
+        raw_str_lower = raw_str.lower()
+
+        for target in self.team2_technicians:
+            first_name = target.split()[0].strip().lower()
+            if target.lower() in raw_str_lower or first_name in raw_str_lower:
+                return True
+
         keywords_bypass = ["HOLD", "SLAHOLD", "WW-BMAE4-CORP", "BMAE4"]
         for kw in keywords_bypass:
             if kw.lower() in raw_str_lower:
@@ -141,7 +173,6 @@ class UpdateTTClient:
         
         target_zone = "2" if zone == "WW BMA East" or not zone else str(zone)
 
-        # 🎯 ดึงตั๋วแบบครอบคลุมทั้ง Corporate Service, Incident และค่าว่าง
         payloads_to_try = [
             {"zone": target_zone, "workType": worktype, "includeClosedWithin24Hours": "No"},
             {"zone": target_zone, "workType": "Incident", "includeClosedWithin24Hours": "No"},
@@ -198,6 +229,7 @@ class UpdateTTClient:
     def fetch_filtered_tickets(
         self, zone: str = "2", worktype: str = "Corporate Service"
     ) -> list:
+        """ฟังก์ชันกรองข้อมูลตั๋วสำหรับทีมที่ 1 (เดิม)"""
         all_tickets = self.fetch_all_tickets_from_web(zone=zone, worktype=worktype)
         filtered_tickets = []
 
@@ -208,6 +240,22 @@ class UpdateTTClient:
         print(f"🎯 จากทั้งหมด {len(all_tickets)} รายการ -> คัดเหลือเฉพาะช่างในทีมและตั๋ว INC {len(filtered_tickets)} รายการ")
         return filtered_tickets
 
+    # ==========================================
+    # 📌 ฟังก์ชันกรองข้อมูลตั๋วสำหรับ "ทีมที่ 2"
+    # ==========================================
+    def fetch_filtered_tickets_team2(
+        self, zone: str = "2", worktype: str = "Corporate Service"
+    ) -> list:
+        all_tickets = self.fetch_all_tickets_from_web(zone=zone, worktype=worktype)
+        filtered_tickets = []
+
+        for item in all_tickets:
+            if self.is_team2_technician(item):
+                filtered_tickets.append(item)
+
+        print(f"🎯 [Team 2] จากทั้งหมด {len(all_tickets)} รายการ -> คัดเหลือเฉพาะช่างทีม 2 จำนวน {len(filtered_tickets)} รายการ")
+        return filtered_tickets
+
     def fetch_details_in_parallel(
         self,
         tickets: list,
@@ -215,7 +263,6 @@ class UpdateTTClient:
         worktype: str = "Corporate Service",
         max_workers: int = 8
     ) -> list:
-        """🚀 ดึงรายละเอียดตั๋วแบบขนานด้วย Multi-threading เพื่อเพิ่มความเร็ว"""
         results = []
         if not tickets:
             return results
@@ -223,7 +270,6 @@ class UpdateTTClient:
         print(f"⚡ เริ่มดึงรายละเอียดตั๋วขนานกัน ({max_workers} Workers)...")
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Map แต่ละตั๋วเข้ากับการดึง Detail
             future_to_ticket = {
                 executor.submit(self.get_ticket_detail, item, zone, worktype): item
                 for item in tickets
@@ -266,15 +312,18 @@ class UpdateTTClient:
         ticket_item,
         zone: str = "2",
         worktype: str = "Corporate Service",
-        retry: bool = True
+        retry: bool = True,
+        is_team2: bool = False
     ) -> dict:
+        """
+        ปรับให้รองรับการเช็กเขตพื้นที่ (allowed_districts) แยกตามทีมได้ 
+        (ทีมที่ 1 เช็กจาก self.allowed_districts / ทีมที่ 2 เช็กจาก self.team2_allowed_districts)
+        """
         self.ensure_authenticated_session()
         ticket_id = self.extract_ticket_id(ticket_item)
         target_zone = "2" if zone == "WW BMA East" or not zone else str(zone)
 
         url = f"{self.base_url}/get_ticketDeatil"
-
-        # 🎯 ตั๋ว INC จะพยายามดึงหลายๆ WorkType เพื่อป้องกันไม่ให้ข้อมูลหลุด
         worktypes_to_try = [worktype, "Incident", ""] if "INC" in ticket_id.upper() else [worktype, ""]
 
         for wt in worktypes_to_try:
@@ -300,25 +349,27 @@ class UpdateTTClient:
 
                     address_info = str(data)
 
-                    # 🚫 1. เช็ก Blacklist เขตห้าม (ดินแดง)
-                    if any(ex_dist in address_info for ex_dist in self.excluded_districts):
-                        print(f"⛔ ตั๋ว {ticket_id} ติด Blacklist ดินแดง -> ข้าม")
-                        return {}
-
-                    # 🎯 2. กรองเขต: สำหรับตั๋ว TT ให้เช็กเขตที่อนุญาต / สำหรับตั๋ว INC ให้ปล่อยผ่านได้เลยถ้าไม่ติด Blacklist
-                    is_inc = "INC" in ticket_id.upper()
-                    if not is_inc:
-                        if not any(dist in address_info for dist in self.allowed_districts):
+                    # 🎯 เลือกว่าจะใช้กฎเขตพื้นที่ของทีมไหน
+                    if is_team2:
+                        # ทีมที่ 2 เช็กเขตรับผิดชอบเฉพาะ (ราชเทวี, พญาไท, ปทุมวัน, ดินแดง)
+                        if not any(dist in address_info for dist in self.team2_allowed_districts):
                             return {}
+                    else:
+                        # ทีมที่ 1 (เดิม): เช็ก Blacklist ดินแดง และเขตที่อนุญาตเดิม
+                        if any(ex_dist in address_info for ex_dist in self.excluded_districts):
+                            return {}
+
+                        is_inc = "INC" in ticket_id.upper()
+                        if not is_inc:
+                            if not any(dist in address_info for dist in self.allowed_districts):
+                                return {}
 
                     result_dict = data if isinstance(data, dict) else {"data": data}
 
-                    # ดึง Activity Log และเวลา HOLD SLA
                     activity_log_text = self.get_ticket_activity_log(ticket_id, zone=target_zone)
                     hold_info = self.parse_hold_sla(activity_log_text, raw_data=result_dict)
                     result_dict["hold_info"] = hold_info
 
-                    # 🎯 1️⃣ [หลัก] ถ้ามีการโฮ (HOLD SLA) -> ให้ใช้วันเวลานัดหมายโฮเป็นหลักทันที
                     if hold_info.get("is_hold") and hold_info.get("reschedule_time"):
                         real_time = hold_info["reschedule_time"]
                         result_dict["ExpectDate"] = real_time
@@ -326,8 +377,6 @@ class UpdateTTClient:
                         result_dict["appointment_date"] = real_time
                         result_dict["appointDate"] = real_time
                         result_dict["appoint_date"] = real_time
-                    
-                    # 🎯 2️⃣ [งานเข้าใหม่] ถ้ายังไม่ได้โฮ -> ให้ใช้ OpenDate (วันที่เปิดตั๋วรับงาน) เพื่อจัดเข้างานวันนี้
                     else:
                         open_date_raw = result_dict.get("OpenDate") or result_dict.get("openDate") or result_dict.get("open_date") or ""
                         
@@ -352,7 +401,7 @@ class UpdateTTClient:
 
         if retry:
             self.ensure_authenticated_session(force_refresh=True)
-            return self.get_ticket_detail(ticket_item, zone=zone, worktype=worktype, retry=False)
+            return self.get_ticket_detail(ticket_item, zone=zone, worktype=worktype, retry=False, is_team2=is_team2)
 
         return {}
 
@@ -365,7 +414,6 @@ class UpdateTTClient:
         clean_text = re.sub(r'<[^>]+>', ' ', log_text)
         clean_text = re.sub(r'\s+', ' ', clean_text)
 
-        # 🎯 ต้องมีคำว่า HOLD SLA หรือ SLA HOLD ใน Log จริงๆ เท่านั้น
         if "HOLD SLA" in clean_text.upper() or "SLA HOLD" in clean_text.upper():
             pattern = r'HOLD\s+SLA\s*\([^)]*?\bto\s+(\d{1,2}/\d{1,2}/\d{2,4}\s+\d{1,2}:\d{2})\)'
             match = re.search(pattern, clean_text, re.IGNORECASE)
@@ -379,13 +427,12 @@ class UpdateTTClient:
                     if len(d_p) == 3:
                         p1, p2, p3 = int(d_p[0]), int(d_p[1]), int(d_p[2])
                         
-                        # แปลงฟอร์แมต MM/DD/YY vs DD/MM/YY
                         if p2 > 12:
                             mm, dd, yy = str(p1).zfill(2), str(p2).zfill(2), str(p3)
                         else:
                             dd, mm, yy = str(p1).zfill(2), str(p2).zfill(2), str(p3)
                         
-                        yyyy = f"20{yy}" if len(str(yy)) == 2 else str(yy)
+                        yyyy = f"20{yy}" if len(str(yy)) == 2 else str(str(yy))
                         if int(yyyy) < 2026:
                             yyyy = "2026"
 
@@ -395,5 +442,4 @@ class UpdateTTClient:
             if reason_match:
                 result["reason"] = reason_match.group(0).strip()
 
-        # 🚫 ถ้าไม่มี HOLD SLA ให้คืนค่า reschedule_time เป็น None เสมอ
         return result

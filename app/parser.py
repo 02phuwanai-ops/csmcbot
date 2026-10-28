@@ -3,14 +3,22 @@ from datetime import datetime
 from bs4 import BeautifulSoup
 
 ALIASES = {
+    # 📌 ทีมเดิม (ทีมที่ 1)
     "K.Wittaya Saomoke": ["Wittaya Saomoke", "Wittaya", "Saomoke"],
     "K.Supoj Kaeokhrueng": ["Supoj Kaeokhrueng", "Supoj", "Kaeokhrueng"],
     "K.Chakares Sudjai": ["Chakares Sudjai", "Chakares", "Sudjai"],
     "K.Kampol Sinchai": ["Kampol Sinchai", "Kampol", "Sinchai"],
     "K.Phuwanai Sopradit": ["Phuwanai Sopradit", "Phuwanai", "Sopradit"],
+    
+    # 📌 ทีมใหม่ (ทีมที่ 2)
+    "K.Chetha Chuthasri": ["Chetha Chuthasri", "Chetha", "จุฑาศรี"],
+    "K.Kiattisak Kopumee": ["Kiattisak Kopumee", "Kiattisak", "โคภูมี"],
+    "K.Rachan Preeda": ["Rachan Preeda", "Rachan", "ปรีดา"],
+    "K.Uttakich Yos-in": ["Uttakich Yos-in", "Uttakich", "ยศอินทร์"],
+    "K.Rattanapol Dangprasertkul": ["Rattanapol Dangprasertkul", "Rattanapol", "แดงประเสริฐกุล"],
 }
 
-# 🎯 กำหนดเฉพาะเขตพื้นที่รับผิดชอบหลักของทีม
+# 🎯 กำหนดเฉพาะเขตพื้นที่รับผิดชอบหลักของทีมเดิม (ทีมที่ 1)
 MAIN_ZONES = [
     "พระโขนง",
     "คลองเตย",
@@ -18,6 +26,14 @@ MAIN_ZONES = [
     "วัฒนา",
     "ลาดพร้าว",
     "วังทองหลาง",
+]
+
+# 🎯 กำหนดเขตพื้นที่รับผิดชอบของทีมที่ 2
+TEAM2_ZONES = [
+    "ราชเทวี",
+    "พญาไท",
+    "ปทุมวัน",
+    "ดินแดง",
 ]
 
 TECH_PHONES = [
@@ -57,7 +73,6 @@ def extract_appointment_info(full_text: str, res_json: dict = None) -> dict:
     today_str = today_dt.strftime("%d/%m/%Y")
     current_year = today_dt.year
 
-    # 🎯 1. ตรวจสอบจาก res_json (ค่าที่ updatett.py ส่งมาให้)
     if isinstance(res_json, dict):
         target_dt_str = (
             res_json.get("appointment_date")
@@ -66,7 +81,6 @@ def extract_appointment_info(full_text: str, res_json: dict = None) -> dict:
             or ""
         )
         if target_dt_str:
-            # รูปแบบ "DD/MM/YYYY เวลา HH:MM น." หรือ "DD/MM/YYYY HH:MM"
             m_formatted = re.search(r"(\d{1,2}/\d{1,2}/\d{4})\s*(?:เวลา\s*)?(\d{1,2}:\d{2})", target_dt_str)
             if m_formatted:
                 d_str, t_str = m_formatted.group(1), m_formatted.group(2)
@@ -103,7 +117,6 @@ def extract_appointment_info(full_text: str, res_json: dict = None) -> dict:
 
         return date_formatted, f"{time_clean} น.", dt_obj
 
-    # 🎯 2. Pattern Hold SLA (กรณีนัดอนาคตจาก HOLD)
     hold_matches = re.findall(
         r"to\s+(\d{1,2}[/\.-]\d{1,2}[/\.-]\d{2,4})\s+(\d{1,2}[:\.]\d{2})",
         full_text, re.IGNORECASE
@@ -114,7 +127,6 @@ def extract_appointment_info(full_text: str, res_json: dict = None) -> dict:
         if d_fmt:
             return {"date": d_fmt, "time": t_fmt, "datetime_obj": dt_obj}
 
-    # 🎯 3. ดึงเวลาอย่างเดียว หากไม่มีวันที่นัดหมายระบุชัดเจน ให้ยึดเป็นวันนี้
     time_only_match = re.search(r"เวลา\s*(\d{1,2}[:\.]\d{2})", full_text)
     time_val = time_only_match.group(1).replace(".", ":") if time_only_match else "00:00"
     
@@ -223,9 +235,7 @@ def parse_and_group_by_zone(
         
         full_text = f"{ticket_text} {circuit_text} {raw_json_str}"
 
-        # -------------------------------------------------------------
         # 0. ตรวจสอบตั๋วปิดงาน
-        # -------------------------------------------------------------
         close_patterns = [
             r"ช่าง(?:พื้นที่)?\s*.*?\s*ขอปิดงาน",
             r"ช่างแจ้งปิดงาน",
@@ -239,16 +249,12 @@ def parse_and_group_by_zone(
         if any(re.search(pat, full_text, re.IGNORECASE) for pat in close_patterns):
             continue
 
-        # -------------------------------------------------------------
-        # 🎯 0.5 กรองเฉพาะเขตพื้นที่รับผิดชอบของทีม (MAIN_ZONES)
-        # -------------------------------------------------------------
+        # 🎯 0.5 กรองเฉพาะเขตพื้นที่รับผิดชอบของทีม
         active_zones = target_zones or MAIN_ZONES
         if not any(zone in full_text for zone in active_zones):
             continue
 
-        # -------------------------------------------------------------
         # 1. ดึง Ticket ID
-        # -------------------------------------------------------------
         ticket_id = "N/A"
         selected_ticket_elem = soup_ticket.select_one("#select2-ticketID-container")
         if selected_ticket_elem:
@@ -260,15 +266,11 @@ def parse_and_group_by_zone(
             ticket_m = re.search(r"((?:TT|INC)\d{8,14})", full_text)
             ticket_id = ticket_m.group(1) if ticket_m else "N/A"
 
-        # -------------------------------------------------------------
-        # 2. ดึงข้อมูลวัน/เวลานัดหมาย & Remark (ส่ง res_json เข้าไปเช็กก่อน)
-        # -------------------------------------------------------------
+        # 2. ดึงข้อมูลวัน/เวลานัดหมาย & Remark
         appt_data = extract_appointment_info(full_text, res_json=res_json)
         remark_str = extract_hold_remark(full_text)
 
-        # -------------------------------------------------------------
         # 3. ดึง Circuit ID & ชื่อสถานที่
-        # -------------------------------------------------------------
         circuit_id = extract_circuit_id(full_text)
 
         loc_m = re.search(
@@ -284,9 +286,7 @@ def parse_and_group_by_zone(
 
         circuit_disp = f"Circuit: {circuit_id} {location_address}".strip() if circuit_id else location_address
 
-        # -------------------------------------------------------------
         # 4. ดึง ชื่อผู้ติดต่อ & เบอร์โทรศัพท์
-        # -------------------------------------------------------------
         contact_name, phone_number = extract_customer_contact(full_text)
 
         contact_disp = ""
@@ -297,9 +297,7 @@ def parse_and_group_by_zone(
         elif phone_number:
             contact_disp = f"ติดต่อ : {phone_number}"
 
-        # -------------------------------------------------------------
         # 5. เก็บข้อมูลเข้า parsed_tickets
-        # -------------------------------------------------------------
         parsed_tickets.append({
             "ticket_id": ticket_id,
             "company_info": circuit_disp,
@@ -313,14 +311,10 @@ def parse_and_group_by_zone(
     if not parsed_tickets:
         return "ไม่มีรายการงานซ่อมในระบบ"
 
-    # -------------------------------------------------------------
     # 6. เรียงลำดับงานตาม วันที่ และ เวลา
-    # -------------------------------------------------------------
     parsed_tickets.sort(key=lambda x: x["datetime_obj"])
 
-    # -------------------------------------------------------------
     # 7. สร้าง Output แยกหมวดหมู่
-    # -------------------------------------------------------------
     today_tickets = [t for t in parsed_tickets if t["appt_date"] == today_formatted]
     future_tickets = [t for t in parsed_tickets if t["appt_date"] != today_formatted]
 
