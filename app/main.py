@@ -320,12 +320,10 @@ async def callback(request: Request, background_tasks: BackgroundTasks):
                 source_type = source.get("type")
                 user_id = source.get("userId")
 
-                # เพิ่มโค้ดนี้ไว้ในฟังก์ชัน callback (ในส่วนที่เช็กข้อความ)
+                # แก้ไขตรงนี้ให้กำหนดค่าลงใน target_id ครับ
                 if source_type == "group":
-                    group_id = source.get("groupId")
-                    print(f"📌 Group ID ของกลุ่มนี้คือ: {group_id}")
-
-            
+                    target_id = source.get("groupId")
+                    print(f"📌 Group ID ของกลุ่มนี้คือ: {target_id}")
                 elif source_type == "room":
                     target_id = source.get("roomId")
                 else:
