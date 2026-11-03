@@ -18,7 +18,7 @@ class UpdateTTClient:
             "Kampol Sinchai",
             "Phuwanai Sopradit",
             "Naruenat Sompum",
-            "Pollawat",
+            "Kunavut Chunkew",
         ]
 
         # 2. รายชื่อ 6 เขต/แขวงที่อนุญาต (ทีมเดิม)
