@@ -9,7 +9,7 @@ ALIASES = {
     "K.Chakares Sudjai": ["Chakares Sudjai", "Chakares", "Sudjai"],
     "K.Kampol Sinchai": ["Kampol Sinchai", "Kampol", "Sinchai"],
     "K.Phuwanai Sopradit": ["Phuwanai Sopradit", "Phuwanai", "Sopradit"],
-    "K.Kunavut Chunkew": ["K.Kunavut Chunkew"]
+    "K.Kunavut Chunkew": ["K.Kunavut Chunkew"],
     # 📌 ทีมใหม่ (ทีมที่ 2)
     "K.Chetha Chuthasri": ["Chetha Chuthasri", "Chetha", "จุฑาศรี"],
     "K.Kiattisak Kopumee": ["Kiattisak Kopumee", "Kiattisak", "โคภูมี"],
